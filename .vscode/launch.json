@@ -1,0 +1,12 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run Automation",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_amzn_account_health_metrics.py",
+            "console": "integratedTerminal"
+        }
+    ]
+}
