@@ -25,6 +25,9 @@ win_user: str = os.getlogin()
 load_dotenv()
 username: str = os.getenv("AMZN_email")
 password: str = os.getenv("AMZN_pass")
+sender_email: str = os.getenv("SENDER_EMAIL")
+to_email: list[str] = [e.strip() for e in os.getenv("TO_EMAIL", "").split(",") if e.strip()]
+cc_email: list[str] = [e.strip() for e in os.getenv("CC_EMAIL", "").split(",") if e.strip()]
 
 #Set Chrome User Data Directory
 #user_data_dir: str = f"C:/Users/{win_user}/AppData/Local/Google/Chrome/User Data"
@@ -87,29 +90,29 @@ while True:
                 if nowHour >= StartHour:
                     if StartHour > 12:
                         StartHour -= 12
-                        print(f"'[INFO]' Account Health Metrics dashboard will be updated on Monday at {StartHour}:{StartMin} PM.")
+                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated on Monday at {StartHour}:{StartMin} PM.")
                     else:
-                        print(f"'[INFO]' Account Health Metrics dashboard will be updated on Monday at {StartHour}:{StartMin} AM.")
+                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated on Monday at {StartHour}:{StartMin} AM.")
                 else:
                     if StartHour > 12:
                         StartHour -= 12
-                        print(f"'[INFO]' Account Health Metrics dashboard will be updated today at {StartHour}:{StartMin} PM.")
+                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated today at {StartHour}:{StartMin} PM.")
                     else:
-                        print(f"'[INFO]' Account Health Metrics dashboard will be updated today at {StartHour}:{StartMin} AM.")
+                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated today at {StartHour}:{StartMin} AM.")
 
             else:
                 if nowHour >= StartHour:
                     if StartHour > 12:
                         StartHour -= 12
-                        print(f"'[INFO]' Account Health Metrics dashboard will be updated tomorrow {tomorrow} at {StartHour}:{StartMin} PM.")
+                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated tomorrow {tomorrow} at {StartHour}:{StartMin} PM.")
                     else:
-                        print(f"'[INFO]' Account Health Metrics dashboard will be updated tomorrow {tomorrow} at {StartHour}:{StartMin} AM.")
+                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated tomorrow {tomorrow} at {StartHour}:{StartMin} AM.")
                 else:
                     if StartHour > 12:
                         StartHour -= 12
-                        print(f"'[INFO]' Account Health Metrics dashboard will be updated today at {StartHour}:{StartMin} PM.")
+                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated today at {StartHour}:{StartMin} PM.")
                     else:
-                        print(f"'[INFO]' Account Health Metrics dashboard will be updated today at {StartHour}:{StartMin} AM.")
+                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated today at {StartHour}:{StartMin} AM.")
 
             #Sleep until just before the Start time
             time.sleep(max(SleepTime - 1, 0))
@@ -128,7 +131,7 @@ while True:
         #Set workbook properties
         AHwb: str = f"{directory}/Amazon/Reports/AH-Metrics.xlsm"
 
-        print("'[INFO]' Opening workbook and removing charts.")
+        print("[cyan][INFO][/cyan] Opening workbook and removing charts.")
         AHMetrics = xw.Book(AHwb)
         shMetrics = AHMetrics.sheets(1)
         shDash = AHMetrics.sheets(2)
@@ -149,7 +152,7 @@ while True:
                 )
                 opening_browser = False
             except (SessionNotCreatedException, RuntimeError):
-                print("'[ERROR]' Failed to open the Chrome. It seems Chrome was already open. Killing the application and retrying.")
+                print("[bold red][ERROR][/bold red] Failed to open the Chrome. It seems Chrome was already open. Killing the application and retrying.")
                 custom_functions.kill_app("chrome")
                 time.sleep(5)
 
@@ -169,7 +172,7 @@ while True:
                 case "FocusHome":
                     root = "Focus Home"
 
-            print(f"'[INFO]' Navigating to '{root}' account.")
+            print(f"[cyan][INFO][/cyan] Navigating to [cyan]{root}[/cyan] account.")
             driver.get(url)
             driver.switch_to_window(0)
 
@@ -179,7 +182,7 @@ while True:
                     code = accounts.Amazon_login(driver, username, password)
 
                     if not code:
-                        print("'[ERROR]' Failed to log in to Amazon. Trying again.")
+                        print("[bold red][ERROR][/bold red] Failed to log in to Amazon. Trying again.")
                         driver.get(url)
                         driver.switch_to_window(0)
 
@@ -194,14 +197,14 @@ while True:
                     driver.get("https://sellercentral.amazon.com/performance/dashboard")
                     driver.switch_to_window(0)
 
-                    print(f"'[INFO]' Getting '{root}' Account Health Statistics.")
+                    print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] Account Health Statistics.")
                     ShipRate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "shipping-late-shipment-rate-row"))).text.split("\n")
                     PreCancelRate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "shipping-cancellation-rate-row"))).text.split("\n")
                     ValidTrackRate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "shipping-view-tracking-rate-row"))).text.split("\n")
                     trying = False
 
                 except TimeoutException:
-                    print("'[ERROR]' Failed to get 'Account Health' Statistics. Retrying.")
+                    print("[bold red][ERROR][/bold red] Failed to get [cyan]Account Health[/cyan] Statistics. Retrying.")
                     time.sleep(5)
 
             try:
@@ -249,7 +252,7 @@ while True:
             driver.get("https://sellercentral.amazon.com/performance/eligibilities?ref=sp-st-dash-mons-elgibl")
             driver.switch_to_window(0)
 
-            print(f"'[INFO]' Getting '{root}' Prime Performance Statistics.")
+            print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] Prime Performance Statistics.")
             PrimePerformance: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "guaranteed-delivery"))).text.split("\n")
 
             AccStatus: str = PrimePerformance[1]
@@ -298,7 +301,7 @@ while True:
                 driver.switch_to_window(0)
                 time.sleep(3)
 
-                print(f"'[INFO]' Checking '{root}' - '{size}' Program current status.")
+                print(f"[cyan][INFO][/cyan] Checking [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Program current status.")
                 ProgramStatus: str = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "a-alert-content"))).text
                 time.sleep(2)
 
@@ -339,7 +342,7 @@ while True:
 
                 ###############################################################################################################################################
                 #Show past seven days Speed metrics
-                print(f"'[INFO]' Getting '{root}' - '{size}' Speed metric charts.")
+                print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Speed metric charts.")
                 WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "show-gvs-metrics-by-date-filter-past-seven-days"))).click()
                 element = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "a-list-item")))
                 driver.execute_script("arguments[0].scrollIntoView(true);", element)
@@ -414,8 +417,8 @@ while True:
                             custom_functions.paste_image_from_clipboard(shDash, "F56")
                         elif account == "FocusHome":
                             custom_functions.paste_image_from_clipboard(shDash, "M56")
-                except:
-                    print("'[ERROR]' Failed to paste chart into Excel")
+                except Exception:
+                    print("[bold red][ERROR][/bold red] Failed to paste chart into Excel")
 
                 ###############################################################################################################################################
                 #Build the ID for the metrics table depending on the size
@@ -425,7 +428,7 @@ while True:
                     table_id = "os-domestic-delivery-speed-details-table"
 
                 #Current size metrics
-                print(f"'[INFO]' Getting '{root}' - '{size}' Speed metrics Statistics.")
+                print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Speed metrics Statistics.")
                 RawMetrics: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((
                     By.ID,
                     table_id
@@ -508,7 +511,7 @@ while True:
 
                 ###############################################################################################################################################
                 #Show past seven days Fulfillment metrics
-                print(f"'[INFO]' Getting '{root}' - '{size}' Fulfillment Statistics.")
+                print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Fulfillment Statistics.")
                 FulfillmentButton = WebDriverWait(driver, 10).until(EC.presence_of_element_located((
                     By.ID,
                     "show-fulfillment-metrics-by-date-filter-past-seven-days"
@@ -696,7 +699,7 @@ while True:
 
                 ###############################################################################################################################################
                 #Show past seven days Supporting metrics
-                print(f"'[INFO]' Getting '{root}' - '{size}' Supporting Statistics.")
+                print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Supporting Statistics.")
                 SupportButton = WebDriverWait(driver, 10).until(EC.presence_of_element_located((
                     By.ID,
                     "show-supporting-metrics-by-date-filter-past-seven-days"
@@ -775,7 +778,7 @@ while True:
         Date: str = f"{currMonth}/{currDate}"
 
         #Call macros
-        print("'[INFO]' Organizing charts, saving and closing workbook.")
+        print("[cyan][INFO][/cyan] Organizing charts, saving and closing workbook.")
         resizeChar()
         time.sleep(3)
         shMetrics.range("B1").value = Date
@@ -783,21 +786,21 @@ while True:
         AHMetrics.save()
         AHMetrics.close()
 
-        print("'[INFO]' Loading workbook and sending email.")
+        print("[cyan][INFO][/cyan] Loading workbook and sending email.")
         time.sleep(30)
         outlook.send_email(
-            account="user@example.com",
+            account=sender_email,
             subject=f"Account Health Metrics - {Date}",
             body=body,
-            to=["user@example.com"],
-            cc=["user@example.com", "user@example.com"],
+            to=to_email,
+            cc=cc_email,
             attachments=[AHwb],
             show=True,
             send=True
         )
 
         #Save and close workbook
-        print("'[INFO]' Email has been sent.")
+        print("[cyan][INFO][/cyan] Email has been sent.")
 
     #Sleep 60 seconds before starting over
     time.sleep(60)
