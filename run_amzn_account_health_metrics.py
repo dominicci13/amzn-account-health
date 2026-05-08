@@ -1,8 +1,7 @@
-import os
 import io
 import json
+import os
 import time
-import ctypes
 import traceback
 import pandas as pd
 import xlwings as xw
@@ -10,38 +9,31 @@ from PIL import Image
 import win32clipboard
 from rich import print
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from fc_utils import chrome, custom_functions, accounts, outlook
+from fc_utils import chrome, custom_functions, accounts, outlook, alert_utils
+from fc_utils.config_utils import get_env
+from fc_utils.schedule_utils import run_on_schedule
+from fc_utils.accounts import AMAZON_ACCOUNT_NAMES
 from selenium.common.exceptions import SessionNotCreatedException, TimeoutException
 
-###############################################################################################################################################
-#Get the user and working directory
 directory: str = os.getcwd()
-win_user: str = os.getlogin()
 
-#Get Seller Central credentials from environment
 load_dotenv()
 username: str = os.getenv("AMZN_email")
 password: str = os.getenv("AMZN_pass")
-sender_email: str = os.getenv("SENDER_EMAIL")
+sender_email: str = os.getenv("SENDER_EMAIL", "")
 to_email: list[str] = [e.strip() for e in os.getenv("TO_EMAIL", "").split(",") if e.strip()]
 cc_email: list[str] = [e.strip() for e in os.getenv("CC_EMAIL", "").split(",") if e.strip()]
+user_data_dir: str = get_env("CHROME_USER_DATA_DIR", required=True)
 
-#Load the Excel cell address config
 with open(f"{directory}/config/cells.json") as f:
     cells = json.load(f)
 
-#Set Chrome User Data Directory
-user_data_dir: str = f"C:/ChromeAutomationProfile"
+ah_wb_path: str = f"{directory}/Amazon/Reports/AH-Metrics.xlsm"
 
-#Get Amazon accounts links
-Accounts = accounts.Amazon()
-
-##################################################################################################################################################
-# Create the body of the email
 body = """
 Good morning,<br><br>
 Please find attached Account Health Metrics file updated for today.<br><br>
@@ -49,133 +41,31 @@ If any questions, please let me know.<br><br>
 Thanks,<br><br>
 """
 
-##################################################################################################################################################
-def seconds_until_target(TargetTime: str):
-    #Calculate the number of seconds until the target time
-    now: datetime = datetime.now()
-    TargetTime = datetime.strptime(TargetTime, "%H:%M:%S").replace(year=now.year, month=now.month, day=now.day)
 
-    if TargetTime < now:
-        TargetTime += timedelta(days=1)
+def main() -> None:
+    """Scrape account health metrics from each Amazon account and email the workbook.
 
-    return (TargetTime - now).total_seconds()
-
-##################################################################################################################################################
-def ShouldRun() -> bool:
-    #Check if today is not Saturday or Sunday
-    today: str = datetime.now().strftime("%A")
-
-    return today not in ["Saturday", "Sunday"]
-
-##################################################################################################################################################
-#Ask the user if they want to start the process now
-BtnPressed = ctypes.windll.user32.MessageBoxW(
-    0,
-    "Do you want to start the script now?",
-    "Account Health Metrics",
-    4 | 0x20
-)
-
-while True:
-    #Time to start
-    StartTime = "11:00:00"
-    StartHour = int(StartTime.split(":")[0])
-    StartMin = StartTime.split(":")[1]
-
-    if ShouldRun():
-        SleepTime = seconds_until_target(StartTime)
-        nowHour = int(datetime.now().strftime("%H"))
-        today: str = datetime.now().strftime("%A")
-        tomorrow: str = custom_functions.tomorrow()
-
-        #If the user pressed "Yes", then start the process
-        if BtnPressed == 7:
-            if tomorrow in ["Saturday", "Sunday"]:
-                if nowHour >= StartHour:
-                    if StartHour > 12:
-                        StartHour -= 12
-                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated on Monday at {StartHour}:{StartMin} PM.")
-                    else:
-                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated on Monday at {StartHour}:{StartMin} AM.")
-                else:
-                    if StartHour > 12:
-                        StartHour -= 12
-                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated today at {StartHour}:{StartMin} PM.")
-                    else:
-                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated today at {StartHour}:{StartMin} AM.")
-
-            else:
-                if nowHour >= StartHour:
-                    if StartHour > 12:
-                        StartHour -= 12
-                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated tomorrow {tomorrow} at {StartHour}:{StartMin} PM.")
-                    else:
-                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated tomorrow {tomorrow} at {StartHour}:{StartMin} AM.")
-                else:
-                    if StartHour > 12:
-                        StartHour -= 12
-                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated today at {StartHour}:{StartMin} PM.")
-                    else:
-                        print(f"[cyan][INFO][/cyan] Account Health Metrics dashboard will be updated today at {StartHour}:{StartMin} AM.")
-
-            #Sleep until just before the Start time
-            time.sleep(max(SleepTime - 1, 0))
-
-            #Loop to ensure that we catch the exact time
-            while datetime.now().strftime("%H:%M:%S") != StartTime:
-                time.sleep(0.5)
-
-            if tomorrow in ["Saturday", "Sunday"] and nowHour >= StartHour:
-                continue
-
-        #Reset the value of the button
-        BtnPressed = 7
-
-        ###############################################################################################################################################
-        #Set workbook properties
-        AHwb: str = f"{directory}/Amazon/Reports/AH-Metrics.xlsm"
+    Opens the AH-Metrics workbook, loops through each Amazon account to scrape
+    shipping performance, Prime eligibility, and Seller Fulfilled Prime stats,
+    pastes charts into the dashboard sheet, saves the workbook, and emails it.
+    """
+    driver = None
+    try:
+        amzn_accounts = accounts.Amazon()
 
         print("[cyan][INFO][/cyan] Opening workbook and removing charts.")
-        AHMetrics = xw.Book(AHwb)
-        shMetrics = AHMetrics.sheets(1)
-        shDash = AHMetrics.sheets(2)
-        delChar = AHMetrics.macro("Module1.DeleteChar")
-        resizeChar = AHMetrics.macro("Module1.ResizeChar")
+        ah_wb = xw.Book(ah_wb_path)
+        sh_metrics = ah_wb.sheets(1)
+        sh_dash = ah_wb.sheets(2)
+        del_char = ah_wb.macro("Module1.DeleteChar")
+        resize_char = ah_wb.macro("Module1.ResizeChar")
 
-        delChar() #Run Macro
+        del_char()
 
-        ###############################################################################################################################################
-        #Initialize Chrome
-        opening_browser = True
-        while opening_browser:
-            try:
-                driver: object = chrome.start_browser(
-                    user_data_dir,
-                    "Default",
-                    headless=True
-                )
-                opening_browser = False
-            except (SessionNotCreatedException, RuntimeError):
-                print("[bold red][ERROR][/bold red] Failed to open the Chrome. It seems Chrome was already open. Killing the application and retrying.")
-                custom_functions.kill_app("chrome")
-                time.sleep(5)
+        driver = chrome.start_browser(user_data_dir, "Default", headless=True)
 
-        #Navigate through each account
-        for account, url in Accounts.items():
-            match account:
-                case "FocusCam":
-                    root = "SellerOrg Corp"
-                case "LifeS":
-                    root = "Lifestyle By Focus"
-                case "XtraB":
-                    root = "XtraBargains"
-                case "KnoxGear":
-                    root = "Knox Gear"
-                case "Apple":
-                    root = "Apple Renewed Focus"
-                case "FocusHome":
-                    root = "Focus Home"
-
+        for account, url in amzn_accounts.items():
+            root = AMAZON_ACCOUNT_NAMES[account]
             col = cells["metrics_columns"][account]
             dash = cells["dashboard"][account]
 
@@ -186,99 +76,77 @@ while True:
             try:
                 code = None
                 while not code:
-                    code = accounts.Amazon_login(driver, username, password)
-
+                    code = accounts.amazon_login(driver, username, username, password)
                     if not code:
                         print("[bold red][ERROR][/bold red] Failed to log in to Amazon. Trying again.")
                         driver.get(url)
                         driver.switch_to_window(0)
-
             except TimeoutException:
                 pass
 
-            ###############################################################################################################################################
+            # Account health stats
             trying = True
             while trying:
                 try:
-                    #Navigate to Account Health Dashboard and get Shipping Performance numbers
                     driver.get("https://sellercentral.amazon.com/performance/dashboard")
                     driver.switch_to_window(0)
 
                     print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] Account Health Statistics.")
-                    ShipRate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "shipping-late-shipment-rate-row"))).text.split("\n")
-                    PreCancelRate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "shipping-cancellation-rate-row"))).text.split("\n")
-                    ValidTrackRate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "shipping-view-tracking-rate-row"))).text.split("\n")
+                    ship_rate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "shipping-late-shipment-rate-row"))).text.split("\n")
+                    pre_cancel_rate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "shipping-cancellation-rate-row"))).text.split("\n")
+                    valid_track_rate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "shipping-view-tracking-rate-row"))).text.split("\n")
                     trying = False
-
                 except TimeoutException:
-                    print("[bold red][ERROR][/bold red] Failed to get [cyan]Account Health[/cyan] Statistics. Retrying.")
+                    print("[bold red][ERROR][/bold red] Failed to get Account Health Statistics. Retrying.")
                     time.sleep(5)
 
             try:
-                LSR: str = ShipRate[2]
-                LSROrders: str = ShipRate[3].replace("orders", "orders (30 days)")
+                lsr: str = ship_rate[2]
+                lsr_orders: str = ship_rate[3].replace("orders", "orders (30 days)")
             except IndexError:
-                LSR = "N/A"
-                LSROrders = "N/A"
+                lsr, lsr_orders = "N/A", "N/A"
 
             try:
-                PCR: str = PreCancelRate[2]
-                PCROrders: str = PreCancelRate[3].replace("orders", "orders (7 days)")
+                pcr: str = pre_cancel_rate[2]
+                pcr_orders: str = pre_cancel_rate[3].replace("orders", "orders (7 days)")
             except IndexError:
-                PCR = "N/A"
-                PCROrders = "N/A"
+                pcr, pcr_orders = "N/A", "N/A"
 
             try:
-                VTR: str = ValidTrackRate[2]
-                VTROrders: str = ValidTrackRate[3].replace("orders", "orders (30 days)")
+                vtr_rate: str = valid_track_rate[2]
+                vtr_orders: str = valid_track_rate[3].replace("orders", "orders (30 days)")
             except IndexError:
-                VTR = "N/A"
-                VTROrders = "N/A"
+                vtr_rate, vtr_orders = "N/A", "N/A"
 
-            values: list[str] = [LSR, LSROrders, PCR, PCROrders, VTR, VTROrders]
-            num_columns = 1
-            rows: list[list[str]] = [values[i:i+num_columns] for i in range(0, len(values), num_columns)]
-            df = pd.DataFrame(rows[0:])
+            values: list[str] = [lsr, lsr_orders, pcr, pcr_orders, vtr_rate, vtr_orders]
+            df = pd.DataFrame([[v] for v in values])
+            sh_metrics.range(f"{col}{cells['metrics_rows']['account_health']}").value = df.values
 
-            shMetrics.range(f"{col}{cells['metrics_rows']['account_health']}").value = df.values
-
-            ###############################################################################################################################################
-            #Navigate to Prime Performance and get the data
+            # Prime performance stats
             driver.get("https://sellercentral.amazon.com/performance/eligibilities?ref=sp-st-dash-mons-elgibl")
             driver.switch_to_window(0)
 
             print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] Prime Performance Statistics.")
-            PrimePerformance: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "guaranteed-delivery"))).text.split("\n")
+            prime_perf: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "guaranteed-delivery"))).text.split("\n")
 
-            AccStatus: str = PrimePerformance[1]
+            acc_status: str = "Eligible" if prime_perf[1].startswith("✓") else "Not Eligible"
+            otdr: str = prime_perf[3]
+            otdr_orders: str = prime_perf[5]
+            pfcr: str = prime_perf[7]
+            pfcr_orders: str = prime_perf[9]
+            vtur: str = prime_perf[11]
+            vtur_orders: str = prime_perf[13]
 
-            if AccStatus.startswith("✓"):
-                AccStatus = "Eligible"
-            else:
-                AccStatus = "Not Eligible"
+            values = [acc_status, otdr, otdr_orders, pfcr, pfcr_orders, vtur, vtur_orders]
+            df = pd.DataFrame([[v] for v in values])
+            sh_metrics.range(f"{col}{cells['metrics_rows']['prime_performance']}").value = df.values
 
-            OTDR: str = PrimePerformance[3]
-            OTDROrders: str = PrimePerformance[5]
-            PFCR: str = PrimePerformance[7]
-            PFCROrders: str = PrimePerformance[9]
-            VTUR: str = PrimePerformance[11]
-            VTUROrders: str = PrimePerformance[13]
-
-            values = [AccStatus, OTDR, OTDROrders, PFCR, PFCROrders, VTUR, VTUROrders]
-            num_columns = 1
-            rows = [values[i:i+num_columns] for i in range(0, len(values), num_columns)]
-            df = pd.DataFrame(rows[0:])
-
-            shMetrics.range(f"{col}{cells['metrics_rows']['prime_performance']}").value = df.values
-
-            ###############################################################################################################################################
-            #Create a dictionary of the Seller Fulfilled Prime performance URLs
+            # Seller Fulfilled Prime stats
             sfp_performance_urls = {
                 "Standard-size": "https://sellercentral.amazon.com/seller-fulfilled-prime/seller-performance?tierName=STD",
                 "Oversize": "https://sellercentral.amazon.com/seller-fulfilled-prime/seller-performance?tierName=OS"
             }
 
-            #Navigate to Seller Fulfilled Prime performance
             for size, sfp_url in sfp_performance_urls.items():
                 driver.get(sfp_url)
                 driver.switch_to_window(0)
@@ -287,199 +155,162 @@ while True:
                 size_key = "standard" if size == "Standard-size" else "oversize"
 
                 print(f"[cyan][INFO][/cyan] Checking [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Program current status.")
-                ProgramStatus: str = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "a-alert-content"))).text
+                program_status: str = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "a-alert-content"))).text
                 time.sleep(2)
 
-                if ProgramStatus == "In Trial":
-                    TrialEndDate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, '//*[@id="sfp-trial-performance-end-date"]'))).text.split(", ")
-                    ProgramStatus = f"{ProgramStatus} (until {TrialEndDate[0]})"
-                elif ProgramStatus.startswith("Your Seller Fulfilled Prime performance has failed "):
-                    ProgramStatus = "Revoked"
+                if program_status == "In Trial":
+                    trial_end_date: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, '//*[@id="sfp-trial-performance-end-date"]'))).text.split(", ")
+                    program_status = f"{program_status} (until {trial_end_date[0]})"
+                elif program_status.startswith("Your Seller Fulfilled Prime performance has failed "):
+                    program_status = "Revoked"
 
-                shMetrics.range(f"{col}{cells['metrics_rows'][f'sfp_{size_key}_status']}").value = ProgramStatus
+                sh_metrics.range(f"{col}{cells['metrics_rows'][f'sfp_{size_key}_status']}").value = program_status
 
-                ###############################################################################################################################################
-                #Show past seven days Speed metrics
+                # Speed metrics
                 print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Speed metric charts.")
                 WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "show-gvs-metrics-by-date-filter-past-seven-days"))).click()
                 element = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "a-list-item")))
                 driver.execute_script("arguments[0].scrollIntoView(true);", element)
                 time.sleep(3)
 
-                ###############################################################################################################################################
-                #Build the CSS Selector for the metrics chart depending on the size
-                if size == "Standard-size":
-                    chart_css = "#std-domestic-delivery-speed-graph > div > div:nth-child(1)"
-                elif size == "Oversize":
-                    chart_css = "#os-domestic-delivery-speed-graph > div > div:nth-child(1)"
+                chart_css = f"#{'std' if size == 'Standard-size' else 'os'}-domestic-delivery-speed-graph > div > div:nth-child(1)"
+                graph = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, chart_css)))
 
-                #Copy the chart element to clipboard, and paste it into Excel
-                Graph = WebDriverWait(driver, 10).until(EC.presence_of_element_located((
-                    By.CSS_SELECTOR,
-                    chart_css
-                )))
-
-                Location = Graph.location
-                Size = Graph.size
+                location = graph.location
+                element_size = graph.size
 
                 png = driver.get_screenshot_as_png()
-                Char = Image.open(io.BytesIO(png))
+                chart_img = Image.open(io.BytesIO(png))
 
-                #Change chart "y" position depending if banner "In Trial" is there
-                left = Location['x']
-                top = Location['y'] - 145
-                right = Location['x'] + Size['width']
-                bottom = Location['y'] + Size['height'] - 130
+                left = location['x']
+                top = location['y'] - 145
+                right = location['x'] + element_size['width']
+                bottom = location['y'] + element_size['height'] - 130
 
-                Char = Char.crop((left, top, right, bottom))
+                chart_img = chart_img.crop((left, top, right, bottom))
 
-                #Save chart screenshot to clipboard
-                Output = io.BytesIO()
-                Char.convert("RGB").save(Output, "BMP")
-                Data = Output.getvalue()[14:]
-                Output.close()
-                custom_functions.send_to_clipboard(win32clipboard.CF_DIB, Data)
+                output = io.BytesIO()
+                chart_img.convert("RGB").save(output, "BMP")
+                data = output.getvalue()[14:]
+                output.close()
+                custom_functions.send_to_clipboard(win32clipboard.CF_DIB, data)
 
                 try:
-                    custom_functions.paste_image_from_clipboard(shDash, dash[f"{size_key}_chart_cell"])
+                    custom_functions.paste_image_from_clipboard(sh_dash, dash[f"{size_key}_chart_cell"])
                 except Exception:
-                    print("[bold red][ERROR][/bold red] Failed to paste chart into Excel")
+                    print("[bold red][ERROR][/bold red] Failed to paste chart into Excel.")
 
-                ###############################################################################################################################################
-                #Build the ID for the metrics table depending on the size
-                if size == "Standard-size":
-                    table_id = "std-domestic-delivery-speed-details-table"
-                elif size == "Oversize":
-                    table_id = "os-domestic-delivery-speed-details-table"
-
-                #Current size metrics
+                table_id = f"{'std' if size == 'Standard-size' else 'os'}-domestic-delivery-speed-details-table"
                 print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Speed metrics Statistics.")
-                RawMetrics: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((
-                    By.ID,
-                    table_id
-                ))).text.split("\n")
+                raw_metrics: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, table_id))).text.split("\n")
 
-                OneDay: list[str] = RawMetrics[-3].split(" ")
-                PercOneDay: str = OneDay[3]
-                ViewsOneDay: str = OneDay[-1]
+                one_day: list[str] = raw_metrics[-3].split(" ")
+                perc_one_day: str = one_day[3]
+                views_one_day: str = one_day[-1]
 
-                TwoDays: list[str] = RawMetrics[-2].split(" ")
-                PercTwoDays: str = TwoDays[3]
-                ViewsTwoDays: str = TwoDays[-1]
+                two_days: list[str] = raw_metrics[-2].split(" ")
+                perc_two_days: str = two_days[3]
+                views_two_days: str = two_days[-1]
 
-                TwoDaysPlus: list[str] = RawMetrics[-1].split(" ")
-                PercTwoDaysPlus: str = TwoDaysPlus[3]
-                ViewsTwoDaysPlus: str = TwoDaysPlus[-1]
+                two_days_plus: list[str] = raw_metrics[-1].split(" ")
+                perc_two_days_plus: str = two_days_plus[3]
+                views_two_days_plus: str = two_days_plus[-1]
 
                 speed_col = dash[f"{size_key}_speed_col"]
                 speed_row = dash[f"{size_key}_speed_row"]
-                shDash.range(f"{speed_col}{speed_row}").value = [PercOneDay, ViewsOneDay]
-                shDash.range(f"{speed_col}{speed_row + 2}").value = [PercTwoDays, ViewsTwoDays]
-                shDash.range(f"{speed_col}{speed_row + 4}").value = [PercTwoDaysPlus, ViewsTwoDaysPlus]
+                sh_dash.range(f"{speed_col}{speed_row}").value = [perc_one_day, views_one_day]
+                sh_dash.range(f"{speed_col}{speed_row + 2}").value = [perc_two_days, views_two_days]
+                sh_dash.range(f"{speed_col}{speed_row + 4}").value = [perc_two_days_plus, views_two_days_plus]
 
-                ###############################################################################################################################################
-                #Show past seven days Fulfillment metrics
+                # Fulfillment metrics
                 print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Fulfillment Statistics.")
-                FulfillmentButton = WebDriverWait(driver, 10).until(EC.presence_of_element_located((
-                    By.ID,
-                    "show-fulfillment-metrics-by-date-filter-past-seven-days"
-                )))
-                driver.execute_script("arguments[0].scrollIntoView(true);", FulfillmentButton)
-                FulfillmentButton.click()
+                fulfillment_btn = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "show-fulfillment-metrics-by-date-filter-past-seven-days")))
+                driver.execute_script("arguments[0].scrollIntoView(true);", fulfillment_btn)
+                fulfillment_btn.click()
                 time.sleep(3)
 
-                #On-time delivery metrics
-                RawOTD: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((
-                    By.CLASS_NAME,
-                    "on-time-delivery.metrics-table-columns"
-                ))).text.split("\n")[1].split(" ")
-                OTD: str = RawOTD[0]
-                OTDUnits: str = RawOTD[4]
+                raw_otd: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "on-time-delivery.metrics-table-columns"))).text.split("\n")[1].split(" ")
+                otd: str = raw_otd[0]
+                otd_units: str = raw_otd[4]
 
                 otd_row = cells["metrics_rows"][f"sfp_{size_key}_otd"]
-                shMetrics.range(f"{col}{otd_row}").value = OTD
-                shMetrics.range(f"{col}{otd_row + 1}").value = OTDUnits
+                sh_metrics.range(f"{col}{otd_row}").value = otd
+                sh_metrics.range(f"{col}{otd_row + 1}").value = otd_units
 
-                #Valid tracking rate metrics
-                RawVTR: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((
-                    By.CLASS_NAME,
-                    "valid-tracking.metrics-table-columns"
-                ))).text.split("\n")
-                VTR = RawVTR[1]
-                VTRPackages: str = RawVTR[3].split(" ")[0]
+                raw_vtr: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "valid-tracking.metrics-table-columns"))).text.split("\n")
+                sfp_vtr: str = raw_vtr[1]
+                sfp_vtr_packages: str = raw_vtr[3].split(" ")[0]
 
                 vtr_row = cells["metrics_rows"][f"sfp_{size_key}_vtr"]
-                shMetrics.range(f"{col}{vtr_row}").value = VTR
-                shMetrics.range(f"{col}{vtr_row + 1}").value = VTRPackages
+                sh_metrics.range(f"{col}{vtr_row}").value = sfp_vtr
+                sh_metrics.range(f"{col}{vtr_row + 1}").value = sfp_vtr_packages
 
-                #Cancellation rate metrics
-                RawCR: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((
-                    By.CLASS_NAME,
-                    "cancellation.metrics-table-columns"
-                ))).text.split("\n")
-                CR: str = RawCR[1]
-                CRUnits: str = RawCR[3].split(" ")[0]
+                raw_cr: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "cancellation.metrics-table-columns"))).text.split("\n")
+                cr: str = raw_cr[1]
+                cr_units: str = raw_cr[3].split(" ")[0]
 
                 cr_row = cells["metrics_rows"][f"sfp_{size_key}_cr"]
-                shMetrics.range(f"{col}{cr_row}").value = CR
-                shMetrics.range(f"{col}{cr_row + 1}").value = CRUnits
+                sh_metrics.range(f"{col}{cr_row}").value = cr
+                sh_metrics.range(f"{col}{cr_row + 1}").value = cr_units
 
-                ###############################################################################################################################################
-                #Show past seven days Supporting metrics
+                # Supporting metrics
                 print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Supporting Statistics.")
-                SupportButton = WebDriverWait(driver, 10).until(EC.presence_of_element_located((
-                    By.ID,
-                    "show-supporting-metrics-by-date-filter-past-seven-days"
-                )))
-                driver.execute_script("arguments[0].scrollIntoView(true);", SupportButton)
-                SupportButton.click()
+                support_btn = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "show-supporting-metrics-by-date-filter-past-seven-days")))
+                driver.execute_script("arguments[0].scrollIntoView(true);", support_btn)
+                support_btn.click()
                 time.sleep(3)
 
-                #On-time shipment metrics
-                RawOTS: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((
-                    By.CLASS_NAME,
-                    "on-time-shipment.metrics-table-columns"
-                ))).text.split("\n")
-                OTS: str = RawOTS[1]
-                OTSUnits: str = RawOTS[2].split(" ")[0]
+                raw_ots: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "on-time-shipment.metrics-table-columns"))).text.split("\n")
+                ots: str = raw_ots[1]
+                ots_units: str = raw_ots[2].split(" ")[0]
 
                 ots_row = cells["metrics_rows"][f"sfp_{size_key}_ots"]
-                shMetrics.range(f"{col}{ots_row}").value = OTS
-                shMetrics.range(f"{col}{ots_row + 1}").value = OTSUnits
+                sh_metrics.range(f"{col}{ots_row}").value = ots
+                sh_metrics.range(f"{col}{ots_row + 1}").value = ots_units
 
                 time.sleep(5)
 
-        #Close browser and save workbook
         driver.quit()
 
-        #Set all necessary date variables
-        currDate: str = datetime.now().strftime("%d/%Y")
-        currMonth: int = datetime.now().month
-        Date: str = f"{currMonth}/{currDate}"
+        curr_month: int = datetime.now().month
+        curr_date: str = datetime.now().strftime("%d/%Y")
+        date_str: str = f"{curr_month}/{curr_date}"
 
-        #Call macros
         print("[cyan][INFO][/cyan] Organizing charts, saving and closing workbook.")
-        resizeChar()
+        resize_char()
         time.sleep(3)
-        shMetrics.range("B1").value = Date
-        shDash.range("B1").value = Date
-        AHMetrics.save()
-        AHMetrics.close()
+        sh_metrics.range("B1").value = date_str
+        sh_dash.range("B1").value = date_str
+        ah_wb.save()
+        ah_wb.close()
 
-        print("[cyan][INFO][/cyan] Loading workbook and sending email.")
+        print("[cyan][INFO][/cyan] Sending email.")
         time.sleep(30)
         outlook.send_email(
             account=sender_email,
-            subject=f"Account Health Metrics - {Date}",
+            subject=f"Account Health Metrics - {date_str}",
             body=body,
             to=to_email,
             cc=cc_email,
-            attachments=[AHwb],
+            attachments=[ah_wb_path],
             show=True,
             send=True
         )
+        print("[cyan][INFO][/cyan] Email sent.")
 
-        print("[cyan][INFO][/cyan] Email has been sent.")
+    except (KeyboardInterrupt, SystemExit):
+        print("[yellow][WARNING][/yellow] Script interrupted by user.")
+        raise SystemExit(0)
 
-    #Sleep 60 seconds before starting over
-    time.sleep(60)
+    except Exception:
+        alert_utils.handle_crash(driver, traceback.format_exc(), "Account Health Metrics")
+        raise SystemExit(1)
+
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+
+run_on_schedule(main, hour=11, minute=0, day_of_week="mon-fri")
