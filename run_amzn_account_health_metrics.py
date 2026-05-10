@@ -16,7 +16,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from fc_utils import chrome, custom_functions, accounts, outlook, alert_utils
 from fc_utils.config_utils import get_env
 from fc_utils.schedule_utils import run_on_schedule
-from fc_utils.accounts import AMAZON_ACCOUNT_NAMES
+from fc_utils.accounts import AMAZON_ACCOUNT_NAMES, AMAZON_URLS
 from selenium.common.exceptions import SessionNotCreatedException, TimeoutException
 
 directory: str = os.getcwd()
@@ -51,7 +51,7 @@ def main() -> None:
     """
     driver = None
     try:
-        amzn_accounts = accounts.Amazon()
+        amzn_accounts = AMAZON_URLS
 
         print("[cyan][INFO][/cyan] Opening workbook and removing charts.")
         ah_wb = xw.Book(ah_wb_path)
