@@ -16,6 +16,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from fc_utils import chrome, custom_functions, accounts, outlook, alert_utils
 from fc_utils.config_utils import get_env
 from fc_utils.schedule_utils import run_on_schedule
+from fc_utils.ui_utils import ask_user
 from fc_utils.accounts import AMAZON_ACCOUNT_NAMES, AMAZON_URLS
 from selenium.common.exceptions import SessionNotCreatedException, TimeoutException
 
@@ -313,4 +314,6 @@ def main() -> None:
             pass
 
 
+if ask_user("Run now?", "Amazon Account Health Metrics"):
+    main()
 run_on_schedule(main, hour=11, minute=0, day_of_week="mon-fri")
