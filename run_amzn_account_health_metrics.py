@@ -1,13 +1,12 @@
 import io
-import json
 import os
+import json
 import time
 import traceback
 import pandas as pd
 import xlwings as xw
 from PIL import Image
 import win32clipboard
-from rich import print
 from dotenv import load_dotenv
 from datetime import datetime
 from selenium.webdriver.common.by import By
@@ -17,11 +16,11 @@ from fc_utils import chrome, custom_functions, accounts, outlook, alert_utils
 from fc_utils.config_utils import get_env
 from fc_utils.schedule_utils import run_on_schedule
 from fc_utils.ui_utils import ask_user
-from fc_utils.accounts import AMAZON_ACCOUNT_NAMES, AMAZON_URLS
-from selenium.common.exceptions import SessionNotCreatedException, TimeoutException
+from fc_utils.logging_utils import setup_logging
+from selenium.common.exceptions import TimeoutException
 
-directory: str = os.getcwd()
 
+log = setup_logging("amzn_account_health_metrics")
 load_dotenv()
 username: str = os.getenv("AMZN_email")
 password: str = os.getenv("AMZN_pass")
@@ -30,10 +29,13 @@ to_email: list[str] = [e.strip() for e in os.getenv("TO_EMAIL", "").split(",") i
 cc_email: list[str] = [e.strip() for e in os.getenv("CC_EMAIL", "").split(",") if e.strip()]
 user_data_dir: str = get_env("CHROME_USER_DATA_DIR", required=True)
 
-with open(f"{directory}/config/cells.json") as f:
+with open("config/cells.json") as f:
     cells = json.load(f)
 
-ah_wb_path: str = f"{directory}/Amazon/Reports/AH-Metrics.xlsm"
+with open("config/paths.json") as f:
+    paths = json.load(f)
+
+ah_wb_path: str = paths["ah_wb_path"]
 
 body = """
 Good morning,<br><br>
@@ -51,11 +53,13 @@ def main() -> None:
     pastes charts into the dashboard sheet, saves the workbook, and emails it.
     """
     driver = None
+    excel = None
     try:
-        amzn_accounts = AMAZON_URLS
-
-        print("[cyan][INFO][/cyan] Opening workbook and removing charts.")
-        ah_wb = xw.Book(ah_wb_path)
+        log.info("Opening workbook and removing charts.")
+        excel = xw.App(visible=False)
+        excel.display_alerts = False
+        excel.screen_updating = False
+        ah_wb = excel.books.open(ah_wb_path)
         sh_metrics = ah_wb.sheets(1)
         sh_dash = ah_wb.sheets(2)
         del_char = ah_wb.macro("Module1.DeleteChar")
@@ -65,23 +69,16 @@ def main() -> None:
 
         driver = chrome.start_browser(user_data_dir, "Default", headless=True)
 
-        for account, url in amzn_accounts.items():
-            root = AMAZON_ACCOUNT_NAMES[account]
+        for account, root, url in accounts.iter_amazon_accounts():
             col = cells["metrics_columns"][account]
             dash = cells["dashboard"][account]
 
-            print(f"[cyan][INFO][/cyan] Navigating to [cyan]{root}[/cyan] account.")
+            log.info(f"Navigating to [cyan]{root}[/cyan] account.")
             driver.get(url)
             driver.switch_to_window(0)
 
             try:
-                code = None
-                while not code:
-                    code = accounts.amazon_login(driver, username, username, password)
-                    if not code:
-                        print("[bold red][ERROR][/bold red] Failed to log in to Amazon. Trying again.")
-                        driver.get(url)
-                        driver.switch_to_window(0)
+                accounts.amazon_login(driver, username, username, password, retry_url=url)
             except TimeoutException:
                 pass
 
@@ -92,13 +89,13 @@ def main() -> None:
                     driver.get("https://sellercentral.amazon.com/performance/dashboard")
                     driver.switch_to_window(0)
 
-                    print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] Account Health Statistics.")
+                    log.info(f"Getting [cyan]{root}[/cyan] Account Health Statistics.")
                     ship_rate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "shipping-late-shipment-rate-row"))).text.split("\n")
                     pre_cancel_rate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "shipping-cancellation-rate-row"))).text.split("\n")
                     valid_track_rate: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "shipping-view-tracking-rate-row"))).text.split("\n")
                     trying = False
                 except TimeoutException:
-                    print("[bold red][ERROR][/bold red] Failed to get Account Health Statistics. Retrying.")
+                    log.error("Failed to get Account Health Statistics. Retrying.")
                     time.sleep(5)
 
             try:
@@ -127,7 +124,7 @@ def main() -> None:
             driver.get("https://sellercentral.amazon.com/performance/eligibilities?ref=sp-st-dash-mons-elgibl")
             driver.switch_to_window(0)
 
-            print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] Prime Performance Statistics.")
+            log.info(f"Getting [cyan]{root}[/cyan] Prime Performance Statistics.")
             prime_perf: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "guaranteed-delivery"))).text.split("\n")
 
             acc_status: str = "Eligible" if prime_perf[1].startswith("✓") else "Not Eligible"
@@ -155,7 +152,7 @@ def main() -> None:
 
                 size_key = "standard" if size == "Standard-size" else "oversize"
 
-                print(f"[cyan][INFO][/cyan] Checking [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Program current status.")
+                log.info(f"Checking [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Program current status.")
                 program_status: str = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "a-alert-content"))).text
                 time.sleep(2)
 
@@ -168,7 +165,7 @@ def main() -> None:
                 sh_metrics.range(f"{col}{cells['metrics_rows'][f'sfp_{size_key}_status']}").value = program_status
 
                 # Speed metrics
-                print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Speed metric charts.")
+                log.info(f"Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Speed metric charts.")
                 WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "show-gvs-metrics-by-date-filter-past-seven-days"))).click()
                 element = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "a-list-item")))
                 driver.execute_script("arguments[0].scrollIntoView(true);", element)
@@ -199,10 +196,10 @@ def main() -> None:
                 try:
                     custom_functions.paste_image_from_clipboard(sh_dash, dash[f"{size_key}_chart_cell"])
                 except Exception:
-                    print("[bold red][ERROR][/bold red] Failed to paste chart into Excel.")
+                    log.error("Failed to paste chart into Excel.")
 
                 table_id = f"{'std' if size == 'Standard-size' else 'os'}-domestic-delivery-speed-details-table"
-                print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Speed metrics Statistics.")
+                log.info(f"Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Speed metrics Statistics.")
                 raw_metrics: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, table_id))).text.split("\n")
 
                 one_day: list[str] = raw_metrics[-3].split(" ")
@@ -224,7 +221,7 @@ def main() -> None:
                 sh_dash.range(f"{speed_col}{speed_row + 4}").value = [perc_two_days_plus, views_two_days_plus]
 
                 # Fulfillment metrics
-                print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Fulfillment Statistics.")
+                log.info(f"Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Fulfillment Statistics.")
                 fulfillment_btn = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "show-fulfillment-metrics-by-date-filter-past-seven-days")))
                 driver.execute_script("arguments[0].scrollIntoView(true);", fulfillment_btn)
                 fulfillment_btn.click()
@@ -255,7 +252,7 @@ def main() -> None:
                 sh_metrics.range(f"{col}{cr_row + 1}").value = cr_units
 
                 # Supporting metrics
-                print(f"[cyan][INFO][/cyan] Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Supporting Statistics.")
+                log.info(f"Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Supporting Statistics.")
                 support_btn = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "show-supporting-metrics-by-date-filter-past-seven-days")))
                 driver.execute_script("arguments[0].scrollIntoView(true);", support_btn)
                 support_btn.click()
@@ -277,15 +274,17 @@ def main() -> None:
         curr_date: str = datetime.now().strftime("%d/%Y")
         date_str: str = f"{curr_month}/{curr_date}"
 
-        print("[cyan][INFO][/cyan] Organizing charts, saving and closing workbook.")
+        log.info("Organizing charts, saving and closing workbook.")
         resize_char()
         time.sleep(3)
         sh_metrics.range("B1").value = date_str
         sh_dash.range("B1").value = date_str
         ah_wb.save()
         ah_wb.close()
+        excel.quit()
+        excel = None
 
-        print("[cyan][INFO][/cyan] Sending email.")
+        log.info("Sending email.")
         time.sleep(30)
         outlook.send_email(
             account=sender_email,
@@ -297,10 +296,10 @@ def main() -> None:
             show=True,
             send=True
         )
-        print("[cyan][INFO][/cyan] Email sent.")
+        log.info("Email sent.")
 
     except (KeyboardInterrupt, SystemExit):
-        print("[yellow][WARNING][/yellow] Script interrupted by user.")
+        log.warning("Script interrupted by user.")
         raise SystemExit(0)
 
     except Exception:
@@ -312,6 +311,11 @@ def main() -> None:
             driver.quit()
         except Exception:
             pass
+        if excel is not None:
+            try:
+                excel.quit()
+            except Exception:
+                pass
 
 
 if ask_user("Run now?", "Amazon Account Health Metrics"):

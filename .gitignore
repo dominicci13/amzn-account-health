@@ -9,9 +9,8 @@ __pycache__/
 logs/
 output/
 
-# Config (local secrets — tracked layout files are explicitly un-ignored below)
+# Local config / secrets
 config/*.json
-!config/cells.json
 .env
 
 # Build artifacts
