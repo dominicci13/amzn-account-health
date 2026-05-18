@@ -19,13 +19,17 @@ cp .env.example .env
 
 Edit `.env` with your credentials.
 
-### 3. Configure accounts
+### 3. Configure accounts and workbook layout
 
 ```bash
 cp config/accounts.json.example config/accounts.json
+cp config/metrics_layout.json.example config/metrics_layout.json
+cp config/paths.json.example config/paths.json
 ```
 
-Edit `config/accounts.json` with your Amazon account names and their corresponding Excel cell positions.
+- `config/accounts.json` — Amazon account display names, Seller Central URLs, and per-account Excel column/dashboard cell positions. Loaded by `fc_utils.accounts` (shared keys: `amazon_account_names`, `amazon_urls`, `ebay_profiles`) and by this script (script-specific keys: `account_health_metrics_columns`, `account_health_dashboard`).
+- `config/metrics_layout.json` — row numbers in the metrics sheet (account-agnostic).
+- `config/paths.json` — absolute path to the `AH-Metrics.xlsm` workbook.
 
 ## Run
 

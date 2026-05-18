@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy this file to config/metrics_layout.json. Holds row numbers in the AH-Metrics workbook's metrics sheet (account-agnostic — same row for every account).",
+
+  "metrics_rows": {
+    "account_health": 7,
+    "prime_performance": 17,
+    "sfp_standard_status": 28,
+    "sfp_oversize_status": 38,
+    "sfp_standard_ots": 29,
+    "sfp_standard_otd": 31,
+    "sfp_standard_vtr": 33,
+    "sfp_standard_cr": 35,
+    "sfp_oversize_ots": 39,
+    "sfp_oversize_otd": 41,
+    "sfp_oversize_vtr": 43,
+    "sfp_oversize_cr": 45
+  }
+}

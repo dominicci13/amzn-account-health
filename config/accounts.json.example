@@ -1,0 +1,42 @@
+{
+  "_comment": "Copy this file to config/accounts.json and fill in your actual values. config/accounts.json is gitignored.",
+
+  "amazon_account_names": {
+    "Account1": "My First Store",
+    "Account2": "My Second Store"
+  },
+
+  "amazon_urls": {
+    "Account1": "https://sellercentral.amazon.com/home?mons_sel_dir_mcid=YOUR_MCID_HERE&mons_sel_mkid=ATVPDKIKX0DER&mons_sel_dir_paid=YOUR_PAID_HERE&ignore_selection_changed=true",
+    "Account2": "https://sellercentral.amazon.com/home?mons_sel_dir_mcid=YOUR_MCID_HERE&mons_sel_mkid=ATVPDKIKX0DER&mons_sel_dir_paid=YOUR_PAID_HERE&ignore_selection_changed=true"
+  },
+
+  "ebay_profiles": {
+    "SellerAccount1": "Default",
+    "SellerAccount2": "Profile 1"
+  },
+
+  "account_health_metrics_columns": {
+    "Account1": "C",
+    "Account2": "D"
+  },
+
+  "account_health_dashboard": {
+    "Account1": {
+      "standard_chart_cell": "F10",
+      "oversize_chart_cell": "F18",
+      "standard_speed_col": "C",
+      "standard_speed_row": 10,
+      "oversize_speed_col": "C",
+      "oversize_speed_row": 18
+    },
+    "Account2": {
+      "standard_chart_cell": "M10",
+      "oversize_chart_cell": "M18",
+      "standard_speed_col": "J",
+      "standard_speed_row": 10,
+      "oversize_speed_col": "J",
+      "oversize_speed_row": 18
+    }
+  }
+}
