@@ -1,8 +1,8 @@
 import io
 import os
-import json
 import time
 import traceback
+from pathlib import Path
 import pandas as pd
 import xlwings as xw
 from PIL import Image
@@ -13,7 +13,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from fc_utils import chrome, custom_functions, accounts, outlook, alert_utils
-from fc_utils.config_utils import get_env
+from fc_utils.config_utils import get_env, load_config_safe
 from fc_utils.schedule_utils import run_on_schedule
 from fc_utils.ui_utils import ask_user
 from fc_utils.logging_utils import setup_logging
@@ -29,13 +29,15 @@ to_email: list[str] = [e.strip() for e in os.getenv("TO_EMAIL", "").split(",") i
 cc_email: list[str] = [e.strip() for e in os.getenv("CC_EMAIL", "").split(",") if e.strip()]
 user_data_dir: str = get_env("CHROME_USER_DATA_DIR", required=True)
 
-with open("config/cells.json") as f:
-    cells = json.load(f)
+_accounts_cfg = load_config_safe(Path.cwd() / "config" / "accounts.json")
+_metrics_columns: dict[str, str] = _accounts_cfg.get("account_health_metrics_columns", {})
+_dashboard: dict[str, dict] = _accounts_cfg.get("account_health_dashboard", {})
 
-with open("config/paths.json") as f:
-    paths = json.load(f)
+_layout = load_config_safe(Path.cwd() / "config" / "metrics_layout.json")
+_metrics_rows: dict[str, int] = _layout.get("metrics_rows", {})
 
-ah_wb_path: str = paths["ah_wb_path"]
+_paths = load_config_safe(Path.cwd() / "config" / "paths.json")
+ah_wb_path: str = _paths["ah_wb_path"]
 
 body = """
 Good morning,<br><br>
@@ -70,8 +72,8 @@ def main() -> None:
         driver = chrome.start_browser(user_data_dir, "Default", headless=True)
 
         for account, root, url in accounts.iter_amazon_accounts():
-            col = cells["metrics_columns"][account]
-            dash = cells["dashboard"][account]
+            col = _metrics_columns[account]
+            dash = _dashboard[account]
 
             log.info(f"Navigating to [cyan]{root}[/cyan] account.")
             driver.get(url)
@@ -118,7 +120,7 @@ def main() -> None:
 
             values: list[str] = [lsr, lsr_orders, pcr, pcr_orders, vtr_rate, vtr_orders]
             df = pd.DataFrame([[v] for v in values])
-            sh_metrics.range(f"{col}{cells['metrics_rows']['account_health']}").value = df.values
+            sh_metrics.range(f"{col}{_metrics_rows['account_health']}").value = df.values
 
             # Prime performance stats
             driver.get("https://sellercentral.amazon.com/performance/eligibilities?ref=sp-st-dash-mons-elgibl")
@@ -137,7 +139,7 @@ def main() -> None:
 
             values = [acc_status, otdr, otdr_orders, pfcr, pfcr_orders, vtur, vtur_orders]
             df = pd.DataFrame([[v] for v in values])
-            sh_metrics.range(f"{col}{cells['metrics_rows']['prime_performance']}").value = df.values
+            sh_metrics.range(f"{col}{_metrics_rows['prime_performance']}").value = df.values
 
             # Seller Fulfilled Prime stats
             sfp_performance_urls = {
@@ -162,7 +164,7 @@ def main() -> None:
                 elif program_status.startswith("Your Seller Fulfilled Prime performance has failed "):
                     program_status = "Revoked"
 
-                sh_metrics.range(f"{col}{cells['metrics_rows'][f'sfp_{size_key}_status']}").value = program_status
+                sh_metrics.range(f"{col}{_metrics_rows[f'sfp_{size_key}_status']}").value = program_status
 
                 # Speed metrics
                 log.info(f"Getting [cyan]{root}[/cyan] - [cyan]{size}[/cyan] Speed metric charts.")
@@ -231,7 +233,7 @@ def main() -> None:
                 otd: str = raw_otd[0]
                 otd_units: str = raw_otd[4]
 
-                otd_row = cells["metrics_rows"][f"sfp_{size_key}_otd"]
+                otd_row = _metrics_rows[f"sfp_{size_key}_otd"]
                 sh_metrics.range(f"{col}{otd_row}").value = otd
                 sh_metrics.range(f"{col}{otd_row + 1}").value = otd_units
 
@@ -239,7 +241,7 @@ def main() -> None:
                 sfp_vtr: str = raw_vtr[1]
                 sfp_vtr_packages: str = raw_vtr[3].split(" ")[0]
 
-                vtr_row = cells["metrics_rows"][f"sfp_{size_key}_vtr"]
+                vtr_row = _metrics_rows[f"sfp_{size_key}_vtr"]
                 sh_metrics.range(f"{col}{vtr_row}").value = sfp_vtr
                 sh_metrics.range(f"{col}{vtr_row + 1}").value = sfp_vtr_packages
 
@@ -247,7 +249,7 @@ def main() -> None:
                 cr: str = raw_cr[1]
                 cr_units: str = raw_cr[3].split(" ")[0]
 
-                cr_row = cells["metrics_rows"][f"sfp_{size_key}_cr"]
+                cr_row = _metrics_rows[f"sfp_{size_key}_cr"]
                 sh_metrics.range(f"{col}{cr_row}").value = cr
                 sh_metrics.range(f"{col}{cr_row + 1}").value = cr_units
 
@@ -262,7 +264,7 @@ def main() -> None:
                 ots: str = raw_ots[1]
                 ots_units: str = raw_ots[2].split(" ")[0]
 
-                ots_row = cells["metrics_rows"][f"sfp_{size_key}_ots"]
+                ots_row = _metrics_rows[f"sfp_{size_key}_ots"]
                 sh_metrics.range(f"{col}{ots_row}").value = ots
                 sh_metrics.range(f"{col}{ots_row + 1}").value = ots_units
 
