@@ -11,11 +11,6 @@
     "Account2": "https://sellercentral.amazon.com/home?mons_sel_dir_mcid=YOUR_MCID_HERE&mons_sel_mkid=ATVPDKIKX0DER&mons_sel_dir_paid=YOUR_PAID_HERE&ignore_selection_changed=true"
   },
 
-  "ebay_profiles": {
-    "SellerAccount1": "Default",
-    "SellerAccount2": "Profile 1"
-  },
-
   "account_health_metrics_columns": {
     "Account1": "C",
     "Account2": "D"

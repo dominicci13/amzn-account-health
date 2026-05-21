@@ -10,8 +10,13 @@ logs/
 output/
 downloaded_files/
 
+# Screenshots — ignore everything except .gitkeep so the folder is tracked
+screenshots/*
+!screenshots/.gitkeep
+
 # Local config / secrets
 config/*.json
+!config/*.json.example
 .env
 
 # Build artifacts
@@ -19,11 +24,13 @@ config/*.json
 dist/
 build/
 
-# Claude
+# Working artifacts
+tasks/
 .claude/
-*db
+CLAUDE.md
+*.db
 
-# Data files (Excel, CSV, etc.)
+# Data files
 *.xlsx
 *.xls
 *.xlsm
@@ -31,4 +38,3 @@ build/
 
 # OS junk
 .DS_Store
-Thumbs.db
