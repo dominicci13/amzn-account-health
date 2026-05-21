@@ -64,10 +64,10 @@ def main() -> None:
         ah_wb = excel.books.open(ah_wb_path)
         sh_metrics = ah_wb.sheets(1)
         sh_dash = ah_wb.sheets(2)
-        del_char = ah_wb.macro("Module1.DeleteChar")
-        resize_char = ah_wb.macro("Module1.ResizeChar")
+        delete_charts = ah_wb.macro("modUtilities.deleteCharts")
+        resize_charts = ah_wb.macro("modUtilities.resizeCharts")
 
-        del_char()
+        delete_charts()
 
         driver = chrome.start_browser(user_data_dir, "Default", headless=True)
 
@@ -277,7 +277,7 @@ def main() -> None:
         date_str: str = f"{curr_month}/{curr_date}"
 
         log.info("Organizing charts, saving and closing workbook.")
-        resize_char()
+        resize_charts()
         time.sleep(3)
         sh_metrics.range("B1").value = date_str
         sh_dash.range("B1").value = date_str
