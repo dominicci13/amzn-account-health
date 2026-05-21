@@ -82,6 +82,7 @@ The script prompts "Run now?" — answer **Y** to execute immediately, or **N** 
 | `AMZN_email` | Amazon Seller Central login email |
 | `AMZN_pass` | Amazon Seller Central password |
 | `CHROME_USER_DATA_DIR` | Path to the persistent Chrome profile directory used by the bot |
+| `ALERT_EMAIL` | Outlook recipient for unhandled-exception crash reports |
 | `SENDER_EMAIL` | Outlook account used to send the weekday email |
 | `TO_EMAIL` | Comma-separated recipients |
 | `CC_EMAIL` | Comma-separated CC list (optional) |
