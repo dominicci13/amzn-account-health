@@ -49,16 +49,14 @@ sender_email: str = get_env("SENDER_EMAIL", required=True)
 to_email: list[str] = [e.strip() for e in (get_env("TO_EMAIL", required=True) or "").split(",") if e.strip()]
 cc_email: list[str] = [e.strip() for e in (get_env("CC_EMAIL", default="") or "").split(",") if e.strip()]
 
-_CONFIG_DIR = Path(__file__).resolve().parent / "config"
-
-_accounts_cfg = load_config_safe(_CONFIG_DIR / "accounts.json")
+_accounts_cfg = load_config_safe(Path(__file__).resolve().parent / "config" / "accounts.json")
 _metrics_columns: dict[str, str] = _accounts_cfg.get("account_health_metrics_columns", {})
 _dashboard: dict[str, dict] = _accounts_cfg.get("account_health_dashboard", {})
 
-_layout = load_config_safe(_CONFIG_DIR / "metrics_layout.json")
+_layout = load_config_safe(Path(__file__).resolve().parent / "config" / "metrics_layout.json")
 _metrics_rows: dict[str, int] = _layout.get("metrics_rows", {})
 
-_paths = load_config_safe(_CONFIG_DIR / "paths.json")
+_paths = load_config_safe(Path(__file__).resolve().parent / "config" / "paths.json")
 ah_wb_path: str = _paths["ah_wb_path"]
 
 
@@ -89,10 +87,7 @@ def main() -> None:
         ah_wb = excel.books.open(ah_wb_path)
         sh_metrics = ah_wb.sheets(1)
         sh_dash = ah_wb.sheets(2)
-        delete_charts = ah_wb.macro("modUtilities.deleteCharts")
-        resize_charts = ah_wb.macro("modUtilities.resizeCharts")
-
-        delete_charts()
+        ah_wb.macro("modUtilities.deleteCharts")()
 
         driver = chrome.start_browser(user_data_dir, "Default", headless=True)
 
@@ -302,7 +297,7 @@ def main() -> None:
         date_str: str = f"{curr_month}/{curr_date}"
 
         log.info("Organizing charts, saving and closing workbook.")
-        resize_charts()
+        ah_wb.macro("modUtilities.resizeCharts")()
         time.sleep(3)
         sh_metrics.range("B1").value = date_str
         sh_dash.range("B1").value = date_str
