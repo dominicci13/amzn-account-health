@@ -1,50 +1,75 @@
+"""Weekday Amazon Account Health Metrics scrape.
+
+Once per weekday (Mon-Fri 11:00 local) this script:
+
+1. Opens `AH-Metrics.xlsm` hidden and clears any pre-existing chart shapes
+   on the dashboard sheet via the `modUtilities.deleteCharts` macro.
+2. For each Amazon account in `AMAZON_URLS`, logs into Seller Central and
+   scrapes the Account Health (Late Shipment Rate, Pre-Fulfillment Cancel
+   Rate, Valid Tracking Rate) + Prime Performance (eligibility, OTDR,
+   Pre-Fulfillment Cancellation Rate, Valid Tracking Rate) widgets.
+3. For each size tier (Standard / Oversize), scrapes the Seller Fulfilled
+   Prime page — program status, the speed-distribution chart (1d / 2d / 2d+),
+   and the Fulfillment + Supporting metrics tables — pasting the chart
+   screenshot into the dashboard via the Windows clipboard.
+4. Calls `modUtilities.resizeCharts` to normalize chart dimensions across
+   all pasted images, stamps today's date into both sheets' header cells,
+   and saves + closes the workbook.
+5. Emails the refreshed workbook as an `.xlsm` attachment via Outlook.
+"""
 import io
-import os
 import time
 import traceback
-from pathlib import Path
-import pandas as pd
-import xlwings as xw
-from PIL import Image
-import win32clipboard
-from dotenv import load_dotenv
 from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+import win32clipboard
+import xlwings as xw
+from dotenv import load_dotenv
+from PIL import Image
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from fc_utils import chrome, custom_functions, accounts, outlook, alert_utils
+from selenium.webdriver.support.ui import WebDriverWait
+
+from fc_utils import accounts, alert_utils, chrome, custom_functions, greeting_for, outlook
 from fc_utils.config_utils import get_env, load_config_safe
+from fc_utils.logging_utils import setup_logging
 from fc_utils.schedule_utils import run_on_schedule
 from fc_utils.ui_utils import ask_user
-from fc_utils.logging_utils import setup_logging
-from selenium.common.exceptions import TimeoutException
 
 
 log = setup_logging("amzn_account_health_metrics")
 load_dotenv()
-username: str = os.getenv("AMZN_email")
-password: str = os.getenv("AMZN_pass")
-sender_email: str = os.getenv("SENDER_EMAIL", "")
-to_email: list[str] = [e.strip() for e in os.getenv("TO_EMAIL", "").split(",") if e.strip()]
-cc_email: list[str] = [e.strip() for e in os.getenv("CC_EMAIL", "").split(",") if e.strip()]
+username: str = get_env("AMZN_email", required=True)
+password: str = get_env("AMZN_pass", required=True)
 user_data_dir: str = get_env("CHROME_USER_DATA_DIR", required=True)
+sender_email: str = get_env("SENDER_EMAIL", required=True)
+to_email: list[str] = [e.strip() for e in (get_env("TO_EMAIL", required=True) or "").split(",") if e.strip()]
+cc_email: list[str] = [e.strip() for e in (get_env("CC_EMAIL", default="") or "").split(",") if e.strip()]
 
-_accounts_cfg = load_config_safe(Path.cwd() / "config" / "accounts.json")
+_CONFIG_DIR = Path(__file__).resolve().parent / "config"
+
+_accounts_cfg = load_config_safe(_CONFIG_DIR / "accounts.json")
 _metrics_columns: dict[str, str] = _accounts_cfg.get("account_health_metrics_columns", {})
 _dashboard: dict[str, dict] = _accounts_cfg.get("account_health_dashboard", {})
 
-_layout = load_config_safe(Path.cwd() / "config" / "metrics_layout.json")
+_layout = load_config_safe(_CONFIG_DIR / "metrics_layout.json")
 _metrics_rows: dict[str, int] = _layout.get("metrics_rows", {})
 
-_paths = load_config_safe(Path.cwd() / "config" / "paths.json")
+_paths = load_config_safe(_CONFIG_DIR / "paths.json")
 ah_wb_path: str = _paths["ah_wb_path"]
 
-body = """
-Good morning,<br><br>
-Please find attached Account Health Metrics file updated for today.<br><br>
-If any questions, please let me know.<br><br>
-Thanks,<br><br>
-"""
+
+def _email_body() -> str:
+    """Build the email body with the time-of-day greeting."""
+    return (
+        f"{greeting_for()},<br><br>"
+        "Please find attached Account Health Metrics file updated for today.<br><br>"
+        "If any questions, please let me know.<br><br>"
+        "Thanks,<br><br>"
+    )
 
 
 def main() -> None:
@@ -291,7 +316,7 @@ def main() -> None:
         outlook.send_email(
             account=sender_email,
             subject=f"Account Health Metrics - {date_str}",
-            body=body,
+            body=_email_body(),
             to=to_email,
             cc=cc_email,
             attachments=[ah_wb_path],
