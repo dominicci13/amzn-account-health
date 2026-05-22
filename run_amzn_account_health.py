@@ -1,4 +1,4 @@
-"""Weekday Amazon Account Health Metrics scrape.
+"""Weekday Amazon Account Health scrape.
 
 Once per weekday (Mon-Fri 11:00 local) this script:
 
@@ -40,7 +40,7 @@ from fc_utils.schedule_utils import run_on_schedule
 from fc_utils.ui_utils import ask_user
 
 
-log = setup_logging("amzn_account_health_metrics")
+log = setup_logging("amzn_account_health")
 load_dotenv()
 username: str = get_env("AMZN_email", required=True)
 password: str = get_env("AMZN_pass", required=True)
@@ -325,7 +325,7 @@ def main() -> None:
         raise SystemExit(0)
 
     except Exception:
-        alert_utils.handle_crash(driver, traceback.format_exc(), "Account Health Metrics")
+        alert_utils.handle_crash(driver, traceback.format_exc(), "Account Health")
         raise SystemExit(1)
 
     finally:
@@ -340,6 +340,6 @@ def main() -> None:
                 pass
 
 
-if ask_user("Run now?", "Amazon Account Health Metrics"):
+if ask_user("Run now?", "Amazon Account Health"):
     main()
 run_on_schedule(main, hour=11, minute=0, day_of_week="mon-fri")

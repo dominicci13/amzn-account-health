@@ -1,4 +1,4 @@
-# amzn-account-health-metrics
+# amzn-account-health
 
 Weekday automation that scrapes each Amazon Seller Central storefront's **Account Health** (Late Shipment Rate, Pre-Fulfillment Cancel Rate, Valid Tracking Rate), **Prime Performance**, and **Seller Fulfilled Prime** metrics — including pixel-cropped screenshots of each account's speed-distribution chart — writes the results into `AH-Metrics.xlsm`, and emails the workbook.
 
@@ -15,8 +15,8 @@ The script is **one Python file** orchestrating five external surfaces: Selenium
 ## Project layout
 
 ```
-amzn-account-health-metrics/
-├── run_amzn_account_health_metrics.py  # entry point (single script)
+amzn-account-health/
+├── run_amzn_account_health.py  # entry point (single script)
 ├── config/
 │   ├── accounts.json.example           # Amazon account names + URLs + per-account column/dashboard layout
 │   ├── metrics_layout.json.example     # row numbers in the metrics sheet (account-agnostic)
@@ -37,8 +37,8 @@ amzn-account-health-metrics/
 ### 1. Clone and create the venv
 
 ```powershell
-git clone https://github.com/dominicci13/amzn-account-health-metrics.git
-cd amzn-account-health-metrics
+git clone https://github.com/dominicci13/amzn-account-health.git
+cd amzn-account-health
 py -3.12 -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 .venv\Scripts\pip install git+https://github.com/dominicci13/shared-python-utils.git
@@ -70,7 +70,7 @@ Edit each file with real values. All four are gitignored.
 ### 4. Run
 
 ```powershell
-.venv\Scripts\python run_amzn_account_health_metrics.py
+.venv\Scripts\python run_amzn_account_health.py
 ```
 
 The script prompts "Run now?" — answer **Y** to execute immediately, or **N** to register the APScheduler job and idle until the next **Mon-Fri 11:00** trigger.
