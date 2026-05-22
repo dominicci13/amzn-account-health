@@ -5,7 +5,7 @@
             "name": "Run Automation",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/run_amzn_account_health_metrics.py",
+            "program": "${workspaceFolder}/run_amzn_account_health.py",
             "console": "integratedTerminal"
         }
     ]
