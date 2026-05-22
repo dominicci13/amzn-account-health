@@ -57,7 +57,7 @@ Edit each file with real values. All four are gitignored.
 
 `config/accounts.json` has four top-level keys:
 
-- `amazon_account_names` / `amazon_urls` — consumed by `fc_utils.accounts.iter_amazon_accounts()` at import time.
+- `amazon_account_names` / `amazon_urls` — consumed by `seller_automation_utils.accounts.iter_amazon_accounts()` at import time.
 - `account_health_metrics_columns` — maps each account name to its column letter on the metrics sheet (e.g. `"AccountKeyA": "D"`).
 - `account_health_dashboard` — per-account chart anchor cell + speed-table column/row anchors on the dashboard sheet.
 
