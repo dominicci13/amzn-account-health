@@ -87,6 +87,10 @@ The script prompts "Run now?" — answer **Y** to execute immediately, or **N** 
 | `TO_EMAIL` | Comma-separated recipients |
 | `CC_EMAIL` | Comma-separated CC list (optional) |
 
+## Author
+
+Built by **Brian Ramirez** ([@dominicci13](https://github.com/dominicci13)) — automation & AI workflow specialist. More on my [GitHub profile](https://github.com/dominicci13) and [LinkedIn](https://linkedin.com/in/bdramirez).
+
 ## License
 
 [MIT](LICENSE)
