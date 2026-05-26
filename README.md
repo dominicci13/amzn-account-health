@@ -12,6 +12,79 @@ The script is **one Python file** orchestrating five external surfaces: Selenium
 4. **Normalize + save** — call `modUtilities.resizeCharts` to standardize chart dimensions, stamp today's date into both sheets' header cells, save and close the workbook.
 5. **Email** — send the refreshed `.xlsm` as an attachment via Outlook.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    sched[APScheduler<br/>Mon-Fri 11:00] --> open
+
+    subgraph open[Open workbook — hidden]
+        direction TB
+        xl[xlwings App<br/>visible=False] --> clear[modUtilities.deleteCharts]
+    end
+
+    clear --> loop
+
+    subgraph loop[Per-account scrape]
+        direction TB
+        login[Amazon login] --> ah[Account Health<br/>LSR / PFCR / VTR]
+        ah --> prime[Prime Performance<br/>eligibility / OTDR]
+        prime --> sfp
+        subgraph sfp[SFP per size tier]
+            direction TB
+            status[Program status] --> chart[Chart screenshot<br/>Pillow crop -> clipboard -> paste]
+            chart --> tables[Fulfillment + Supporting tables]
+        end
+    end
+
+    loop --> finalize[modUtilities.resizeCharts<br/>stamp date + save]
+    finalize --> email[Outlook email<br/>.xlsm attachment]
+```
+
+## Performance notes
+
+This is a scrape-and-paste script — there is no SQL Server or Power Query
+stage; values are written straight into the workbook. The notable choices:
+
+- **Excel runs hidden.** `xw.App(visible=False)` with `display_alerts=False`
+  and `screen_updating=False`, quit in a `finally` block. No flashing window,
+  no stolen focus — safe for scheduled runs.
+- **Chart capture stays in memory.** Each speed-distribution chart is
+  screenshotted, cropped with Pillow, and pushed into Excel through the
+  Windows clipboard as a DIB — no temp image files touch disk.
+- **Block writes, not cell-by-cell.** Each metric group is assigned to a
+  sheet range in a single `range(...).value = df.values` call, minimizing COM
+  round-trips.
+- **Version-controlled VBA.** Chart housekeeping (`deleteCharts`,
+  `resizeCharts`) lives in `vba/modUtilities.bas` and is invoked inline
+  (`ah_wb.macro(...)()`), so every run starts on a clean canvas and ends with
+  uniformly sized charts.
+- **Resilient scrape.** The Account Health read retries on `TimeoutException`
+  instead of aborting the run.
+
+## Logging
+
+```text
+11:00:02 INFO     Opening workbook and removing charts.
+11:00:18 INFO     Navigating to AccountKeyA account.
+11:00:33 INFO     Getting AccountKeyA Account Health Statistics.
+11:01:07 INFO     Getting AccountKeyA - Standard-size Speed metric charts.
+11:03:48 INFO     Organizing charts, saving and closing workbook.
+11:04:21 INFO     Email sent.
+```
+
+Configured once via the shared helper:
+
+```python
+from seller_automation_utils.logging_utils import setup_logging
+log = setup_logging("amzn_account_health")
+```
+
+`setup_logging` wires a Rich console handler (colorized output, markup
+rendering, rich tracebacks) and a 1 MB rotating file handler writing to
+`logs/amzn_account_health.log`. Available to every automation that imports
+`seller_automation_utils`.
+
 ## Project layout
 
 ```
