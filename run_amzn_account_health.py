@@ -6,8 +6,8 @@ Once per weekday (Mon-Fri 11:00 local) this script:
    on the dashboard sheet via the `modUtilities.deleteCharts` macro.
 2. For each Amazon account in `AMAZON_URLS`, logs into Seller Central and
    scrapes the Account Health (Late Shipment Rate, Pre-Fulfillment Cancel
-   Rate, Valid Tracking Rate) + Prime Performance (eligibility, OTDR,
-   Pre-Fulfillment Cancellation Rate, Valid Tracking Rate) widgets.
+   Rate, Valid Tracking Rate) + Premium Shipping Options (eligibility, OTDR,
+   Cancellation Rate, Valid Tracking Rate) widgets.
 3. For each size tier (Standard / Oversize), scrapes the Seller Fulfilled
    Prime page — program status, the speed-distribution chart (1d / 2d / 2d+),
    and the Fulfillment + Supporting metrics tables — pasting the chart
@@ -28,7 +28,7 @@ import win32clipboard
 import xlwings as xw
 from dotenv import load_dotenv
 from PIL import Image
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -58,6 +58,46 @@ _metrics_rows: dict[str, int] = _layout.get("metrics_rows", {})
 
 _paths = load_config_safe(Path(__file__).resolve().parent / "config" / "paths.json")
 ah_wb_path: str = _paths["ah_wb_path"]
+
+
+# The 2026-07-30 Program Eligibilities redesign moved each program onto its own
+# widget page, iframed into /ah/eligibility. Loading the widget directly avoids
+# having to switch frames, and is what the old /performance/eligibilities URL now
+# redirects into.
+PSO_WIDGET_URL = "https://sellercentral.amazon.com/fbm-seller-program-dashboard/widget?programId=PSO"
+
+# That redesign also dropped the "2411/2413" order counts that used to sit beside
+# each rate. Nothing on the page carries them any more, and the downloadable defect
+# report lists only defective orders, so the denominator is unrecoverable.
+COUNT_UNAVAILABLE = "N/A"
+
+
+def _premium_shipping_values(status: str, metrics: dict[str, str]) -> list[str]:
+    """Order Premium Shipping widget readings to match metrics sheet rows 17-23.
+
+    The widget lists its metrics as On-Time Delivery, Valid Tracking, Cancellation,
+    which is not the workbook's row order, so values are looked up by title rather
+    than by position.
+
+    Args:
+        status: Eligibility badge label, e.g. `"Eligible"`.
+        metrics: Metric title -> current rate, as read off the widget card.
+
+    Returns:
+        Seven values for rows 17-23: eligibility status, on-time delivery rate,
+        its count cell, cancellation rate, its count cell, valid tracking rate,
+        its count cell. Count cells are always `COUNT_UNAVAILABLE`; a metric the
+        widget did not render falls back to it too.
+    """
+    return [
+        status or COUNT_UNAVAILABLE,
+        metrics.get("On-Time Delivery Rate", COUNT_UNAVAILABLE),
+        COUNT_UNAVAILABLE,
+        metrics.get("Cancellation Rate", COUNT_UNAVAILABLE),
+        COUNT_UNAVAILABLE,
+        metrics.get("Valid Tracking Rate", COUNT_UNAVAILABLE),
+        COUNT_UNAVAILABLE,
+    ]
 
 
 def _email_body() -> str:
@@ -142,22 +182,28 @@ def main() -> None:
             df = pd.DataFrame([[v] for v in values])
             sh_metrics.range(f"{col}{_metrics_rows['account_health']}").value = df.values
 
-            # Prime performance stats
-            driver.get("https://sellercentral.amazon.com/performance/eligibilities?ref=sp-st-dash-mons-elgibl")
+            # Premium shipping stats
+            driver.get(PSO_WIDGET_URL)
             driver.switch_to_window(0)
 
-            log.info(f"Getting [cyan]{root}[/cyan] Prime Performance Statistics.")
-            prime_perf: list[str] = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "guaranteed-delivery"))).text.split("\n")
+            log.info(f"Getting [cyan]{root}[/cyan] Premium Shipping Statistics.")
+            card = WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="program-card--PSO"]')))
+            metric_css = '[data-testid="program-card__metrics__item"]'
+            WebDriverWait(driver, 30).until(lambda d: card.find_elements(By.CSS_SELECTOR, metric_css))
 
-            acc_status: str = "Eligible" if prime_perf[1].startswith("✓") else "Not Eligible"
-            otdr: str = prime_perf[3]
-            otdr_orders: str = prime_perf[5]
-            pfcr: str = prime_perf[7]
-            pfcr_orders: str = prime_perf[9]
-            vtur: str = prime_perf[11]
-            vtur_orders: str = prime_perf[13]
+            try:
+                # kat-badge renders its text into a shadow root, so the label attribute is the only readable copy
+                acc_status: str = card.find_element(By.CSS_SELECTOR, '[data-testid="program-card__status-badge"]').get_attribute("label") or ""
+            except NoSuchElementException:
+                acc_status = "Not Eligible"
 
-            values = [acc_status, otdr, otdr_orders, pfcr, pfcr_orders, vtur, vtur_orders]
+            metrics: dict[str, str] = {}
+            for item in card.find_elements(By.CSS_SELECTOR, metric_css):
+                title: str = item.find_element(By.CSS_SELECTOR, '[data-testid="program-card__metrics__title"]').text.strip()
+                # first line is a Katal status glyph, the rate is the last
+                metrics[title] = item.find_element(By.CSS_SELECTOR, '[data-testid="program-card__metrics__current"]').text.split("\n")[-1].strip()
+
+            values = _premium_shipping_values(acc_status, metrics)
             df = pd.DataFrame([[v] for v in values])
             sh_metrics.range(f"{col}{_metrics_rows['prime_performance']}").value = df.values
 

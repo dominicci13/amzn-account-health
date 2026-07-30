@@ -1,13 +1,13 @@
 # amzn-account-health
 
-Weekday automation that scrapes each Amazon Seller Central storefront's **Account Health** (Late Shipment Rate, Pre-Fulfillment Cancel Rate, Valid Tracking Rate), **Prime Performance**, and **Seller Fulfilled Prime** metrics — including pixel-cropped screenshots of each account's speed-distribution chart — writes the results into `AH-Metrics.xlsm`, and emails the workbook.
+Weekday automation that scrapes each Amazon Seller Central storefront's **Account Health** (Late Shipment Rate, Pre-Fulfillment Cancel Rate, Valid Tracking Rate), **Premium Shipping Options**, and **Seller Fulfilled Prime** metrics — including pixel-cropped screenshots of each account's speed-distribution chart — writes the results into `AH-Metrics.xlsm`, and emails the workbook.
 
-The script is **one Python file** orchestrating five external surfaces: SeleniumBase (Amazon login + DOM scraping across Account Health / Prime / SFP pages), Pillow + Windows clipboard (chart screenshot crop + paste-into-Excel), xlwings (`AH-Metrics.xlsm` opened hidden, two sheets), Outlook (weekday email), and APScheduler (`Mon-Fri 11:00`).
+The script is **one Python file** orchestrating five external surfaces: SeleniumBase (Amazon login + DOM scraping across Account Health / Premium Shipping / SFP pages), Pillow + Windows clipboard (chart screenshot crop + paste-into-Excel), xlwings (`AH-Metrics.xlsm` opened hidden, two sheets), Outlook (weekday email), and APScheduler (`Mon-Fri 11:00`).
 
 ## Weekday flow
 
 1. **Open + clean** — open `AH-Metrics.xlsm` hidden, call `modUtilities.deleteCharts` to clear any pre-existing chart shapes on the dashboard sheet so the new run pastes onto a clean canvas.
-2. **Per-account Account Health + Prime** — log into each account in `AMAZON_URLS`, scrape the Performance Dashboard (Late Shipment Rate, Pre-Fulfillment Cancel Rate, Valid Tracking Rate) and the Prime eligibility page (eligibility status, OTDR, Pre-Fulfillment Cancellation Rate, Valid Tracking Rate). Write into the account's column on the metrics sheet.
+2. **Per-account Account Health + Premium Shipping** — log into each account in `AMAZON_URLS`, scrape the Performance Dashboard (Late Shipment Rate, Pre-Fulfillment Cancel Rate, Valid Tracking Rate) and the Premium Shipping Options widget (eligibility status, OTDR, Cancellation Rate, Valid Tracking Rate). Write into the account's column on the metrics sheet.
 3. **SFP per size tier** — for each size tier (Standard / Oversize), navigate to the SFP Performance page, scrape program status, screenshot the speed-distribution chart (crop with Pillow, paste via Windows clipboard onto the dashboard sheet), then scrape the Fulfillment and Supporting metrics tables.
 4. **Normalize + save** — call `modUtilities.resizeCharts` to standardize chart dimensions, stamp today's date into both sheets' header cells, save and close the workbook.
 5. **Email** — send the refreshed `.xlsm` as an attachment via Outlook.
@@ -28,7 +28,7 @@ flowchart LR
     subgraph loop[Per-account scrape]
         direction TB
         login[Amazon login] --> ah[Account Health<br/>LSR / PFCR / VTR]
-        ah --> prime[Prime Performance<br/>eligibility / OTDR]
+        ah --> prime[Premium Shipping Options<br/>eligibility / OTDR]
         prime --> sfp
         subgraph sfp[SFP per size tier]
             direction TB
@@ -61,6 +61,23 @@ stage; values are written straight into the workbook. The notable choices:
   uniformly sized charts.
 - **Resilient scrape.** The Account Health read retries on `TimeoutException`
   instead of aborting the run.
+- **Premium Shipping is read by metric title, not list position.** The widget
+  orders its metrics On-Time Delivery / Valid Tracking / Cancellation, which is
+  not the workbook's row order, so `_premium_shipping_values` looks each up by
+  title. The previous positional parse turned Amazon's 2026-07-30 layout change
+  into a hard crash.
+
+### Known data gap — Premium Shipping order counts
+
+Amazon's 2026-07-30 Program Eligibilities redesign moved each program into its
+own iframed widget (`/fbm-seller-program-dashboard/widget?programId=PSO`) and
+**stopped publishing the `2411/2413` order counts** that used to sit beside each
+rate. Metrics rows 19, 21 and 23 are therefore written as `N/A`.
+
+The counts are not merely hidden — they are absent from the rendered text, the
+full DOM, and both access routes. The card's *Download defect report* export
+lists only defective orders, so the denominator cannot be reconstructed from it
+either. If Amazon restores the counts, restore them in `_premium_shipping_values`.
 
 ## Logging
 
