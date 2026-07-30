@@ -1,14 +1,14 @@
 # amzn-account-health
 
-Weekday automation that scrapes each Amazon Seller Central storefront's **Account Health** (Late Shipment Rate, Pre-Fulfillment Cancel Rate, Valid Tracking Rate), **Premium Shipping Options**, and **Seller Fulfilled Prime** metrics — including pixel-cropped screenshots of each account's speed-distribution chart — writes the results into `AH-Metrics.xlsm`, and emails the workbook.
+Weekday automation that scrapes each Amazon Seller Central storefront's **Account Health** (Late Shipment Rate, Pre-Fulfillment Cancel Rate, Valid Tracking Rate), **Premium Shipping Options**, and **Seller Fulfilled Prime** metrics — including element screenshots of each account's speed-distribution chart — writes the results into `AH-Metrics.xlsm`, and emails the workbook.
 
-The script is **one Python file** orchestrating five external surfaces: SeleniumBase (Amazon login + DOM scraping across Account Health / Premium Shipping / SFP pages), Pillow + Windows clipboard (chart screenshot crop + paste-into-Excel), xlwings (`AH-Metrics.xlsm` opened hidden, two sheets), Outlook (weekday email), and APScheduler (`Mon-Fri 11:00`).
+The script is **one Python file** orchestrating five external surfaces: SeleniumBase (Amazon login + DOM scraping across Account Health / Premium Shipping / SFP pages), Pillow + Windows clipboard (chart element screenshot + paste-into-Excel), xlwings (`AH-Metrics.xlsm` opened hidden, two sheets), Outlook (weekday email), and APScheduler (`Mon-Fri 11:00`).
 
 ## Weekday flow
 
 1. **Open + clean** — open `AH-Metrics.xlsm` hidden, call `modUtilities.deleteCharts` to clear any pre-existing chart shapes on the dashboard sheet so the new run pastes onto a clean canvas.
 2. **Per-account Account Health + Premium Shipping** — log into each account in `AMAZON_URLS`, scrape the Performance Dashboard (Late Shipment Rate, Pre-Fulfillment Cancel Rate, Valid Tracking Rate) and the Premium Shipping Options widget (eligibility status, OTDR, Cancellation Rate, Valid Tracking Rate). Write into the account's column on the metrics sheet.
-3. **SFP per size tier** — for each size tier (Standard / Oversize), navigate to the SFP Performance page, scrape program status, screenshot the speed-distribution chart (crop with Pillow, paste via Windows clipboard onto the dashboard sheet), then scrape the Fulfillment and Supporting metrics tables.
+3. **SFP per size tier** — for each size tier (Standard / Oversize), navigate to the SFP Performance page, scrape program status, screenshot the speed-distribution chart element (paste via Windows clipboard onto the dashboard sheet), then scrape the Fulfillment and Supporting metrics tables.
 4. **Normalize + save** — call `modUtilities.resizeCharts` to standardize chart dimensions, stamp today's date into both sheets' header cells, save and close the workbook.
 5. **Email** — send the refreshed `.xlsm` as an attachment via Outlook.
 
@@ -32,7 +32,7 @@ flowchart LR
         prime --> sfp
         subgraph sfp[SFP per size tier]
             direction TB
-            status[Program status] --> chart[Chart screenshot<br/>Pillow crop -> clipboard -> paste]
+            status[Program status] --> chart[Chart element screenshot<br/>clipboard -> paste]
             chart --> tables[Fulfillment + Supporting tables]
         end
     end
@@ -50,8 +50,15 @@ stage; values are written straight into the workbook. The notable choices:
   and `screen_updating=False`, quit in a `finally` block. No flashing window,
   no stolen focus — safe for scheduled runs.
 - **Chart capture stays in memory.** Each speed-distribution chart is
-  screenshotted, cropped with Pillow, and pushed into Excel through the
-  Windows clipboard as a DIB — no temp image files touch disk.
+  screenshotted and pushed into Excel through the Windows clipboard as a
+  DIB — no temp image files touch disk.
+- **The chart element is screenshotted directly**, not cropped out of a
+  page capture. The previous approach fed `element.location` (document
+  coordinates) into a viewport screenshot and subtracted fixed pixel
+  offsets, so the captured region slid by whatever the scroll offset
+  happened to be — intermittently framing the chart's legend instead of
+  its plot. `element.screenshot_as_png` is scroll-independent and needs no
+  magic constants.
 - **Block writes, not cell-by-cell.** Each metric group is assigned to a
   sheet range in a single `range(...).value = df.values` call, minimizing COM
   round-trips.

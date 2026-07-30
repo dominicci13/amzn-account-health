@@ -242,18 +242,11 @@ def main() -> None:
                 chart_css = f"#{'std' if size == 'Standard-size' else 'os'}-domestic-delivery-speed-graph > div > div:nth-child(1)"
                 graph = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, chart_css)))
 
-                location = graph.location
-                element_size = graph.size
-
-                png = driver.get_screenshot_as_png()
-                chart_img = Image.open(io.BytesIO(png))
-
-                left = location['x']
-                top = location['y'] - 145
-                right = location['x'] + element_size['width']
-                bottom = location['y'] + element_size['height'] - 130
-
-                chart_img = chart_img.crop((left, top, right, bottom))
+                # Screenshot the element itself rather than cropping a full-page capture.
+                # The old crop fed element.location (document coordinates) into a viewport
+                # screenshot, so the region slid by whatever the scroll offset happened to
+                # be and some charts came out framing the legend instead of the plot.
+                chart_img = Image.open(io.BytesIO(graph.screenshot_as_png))
 
                 output = io.BytesIO()
                 chart_img.convert("RGB").save(output, "BMP")
