@@ -120,11 +120,13 @@ amzn-account-health/
 │   └── paths.json.example              # absolute path to AH-Metrics.xlsm
 ├── vba/
 │   └── modUtilities.bas                # canonical VBA source — deleteCharts + resizeCharts
+├── tests/                              # pure-function tests
 ├── screenshots/                        # crash screenshots (gitignored)
 ├── logs/                               # rotating run logs (gitignored)
 ├── downloaded_files/                   # Chrome download landing zone (gitignored)
 ├── output/                             # reserved for future use (gitignored)
 ├── .env.example
+├── pytest.ini                          # disables the broken html/seleniumbase plugins
 ├── requirements.txt
 └── README.md
 ```
@@ -171,6 +173,12 @@ Edit each file with real values. All four are gitignored.
 ```
 
 The script prompts "Run now?" — answer **Y** to execute immediately, or **N** to register the APScheduler job and idle until the next **Mon-Fri 11:00** trigger.
+
+### 5. Tests
+
+```powershell
+.venv\Scripts\python -m pytest
+```
 
 ## Environment variables
 
