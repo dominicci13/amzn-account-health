@@ -16,15 +16,29 @@ Once per weekday (Mon-Fri 11:00 local) this script:
    all pasted images, stamps today's date into both sheets' header cells,
    and saves + closes the workbook.
 5. Emails the refreshed workbook as an `.xlsm` attachment via Outlook.
+
+Both chart macros return "" or a failure reason (never a `MsgBox`, which would hang
+the hidden Excel) and run under a watchdog: a reason, or a macro still running after
+`MACRO_TIMEOUT_SEC`, crashes the run into `handle_crash` instead of emailing a
+half-built dashboard. The Excel this run opens is ended by its own pid on every path,
+success or crash; nothing is ever killed by name.
 """
+from __future__ import annotations
+
 import io
+import os
+import signal
+import threading
 import time
 import traceback
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import pywintypes
+import win32api
 import win32clipboard
+import win32con
 import xlwings as xw
 from dotenv import load_dotenv
 from PIL import Image
@@ -33,7 +47,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from seller_automation_utils import accounts, alert_utils, chrome, custom_functions, greeting_for, outlook
+from seller_automation_utils import WorkbookRefreshError, accounts, alert_utils, chrome, custom_functions, greeting_for, outlook
 from seller_automation_utils.config_utils import get_env, load_config_safe
 from seller_automation_utils.logging_utils import setup_logging
 from seller_automation_utils.schedule_utils import run_on_schedule
@@ -71,6 +85,10 @@ PSO_WIDGET_URL = "https://sellercentral.amazon.com/fbm-seller-program-dashboard/
 # report lists only defective orders, so the denominator is unrecoverable.
 COUNT_UNAVAILABLE = "N/A"
 
+# Opening the workbook plus deleteCharts took at most 23s over 97 logged runs, and
+# resizeCharts plus the save at most 16s; 3x that is under the fleet's 300s floor.
+MACRO_TIMEOUT_SEC: int = 300
+
 
 def _premium_shipping_values(status: str, metrics: dict[str, str]) -> list[str]:
     """Order Premium Shipping widget readings to match metrics sheet rows 17-23.
@@ -100,6 +118,154 @@ def _premium_shipping_values(status: str, metrics: dict[str, str]) -> list[str]:
     ]
 
 
+def _macro_failure(result: object) -> str | None:
+    """Read a chart macro's return value as success (``None``) or a failure reason.
+
+    ``""`` is the hardened ``Function``'s success. ``None`` is what an old ``Sub`` in the
+    workbook returns, so it is success too, which keeps this safe before the workbook
+    module is re-pasted. Anything else is not a value the contract defines, so it is a
+    failure rather than a guess.
+
+    Args:
+        result: What ``wb.macro(name)()`` returned.
+
+    Returns:
+        ``None`` on success, otherwise the reason to raise with.
+    """
+    if result is None or result == "":
+        return None
+    if isinstance(result, str):
+        return result
+    return f"returned an unexpected {type(result).__name__} ({result!r}); expected '' or a failure reason"
+
+
+def _pin_pid(pid: int) -> object | None:
+    """Hold a handle on this run's Excel so Windows cannot give its pid to another process.
+
+    ``_kill_pid`` and ``excel.kill()`` both act on a bare pid. While this handle is open,
+    that pid keeps naming this Excel even after it has exited, so a kill that lands late
+    fails on the dead process ("Access is denied") instead of reaching whatever program
+    would otherwise have been handed the number. Close it only after the last such kill.
+
+    Args:
+        pid: Process id of the Excel instance this run has just started.
+
+    Returns:
+        The open handle, or ``None`` if it could not be opened.
+    """
+    try:
+        return win32api.OpenProcess(win32con.SYNCHRONIZE, False, pid)
+    except pywintypes.error as exc:
+        log.warning(f"Could not hold Excel pid {pid} ({exc}); a late kill is no longer pid-reuse safe.")
+        return None
+
+
+def _kill_pid(pid: int) -> None:
+    """Terminate one process by pid, ignoring one that has already gone.
+
+    ``os.kill`` on Windows is ``TerminateProcess`` on exactly this pid. It is used from the
+    watchdog thread because the xlwings App cannot be touched there: any property on it
+    is a COM call into the very Excel that is stuck. ``main`` holds the pid with
+    ``_pin_pid`` for as long as this can fire, so it cannot hit a reused pid.
+
+    Args:
+        pid: Process id of the Excel instance this run started.
+    """
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as exc:
+        log.info(f"Excel pid {pid} was already gone ({exc}).")
+
+
+def _run_checked_macro(excel: xw.App, wb: xw.Book, macro_name: str) -> None:
+    """Run a chart macro, raise on its failure reason, and bound it in time.
+
+    A macro stuck on a modal dialog blocks this COM call for good, and no COM call can
+    interrupt it. A watchdog timer therefore kills this run's Excel, by the pid read
+    before the call, once ``MACRO_TIMEOUT_SEC`` passes; the blocked call then fails and
+    is reported as the timeout it was.
+
+    ``display_alerts`` is turned back off afterwards because the macro's Cleanup turns it
+    on, and with alerts on a failed save raises a modal Save As instead of an error.
+
+    Args:
+        excel: The Excel instance this run started.
+        wb: The open workbook holding the macro.
+        macro_name: Full macro name, e.g. ``"modUtilities.deleteCharts"``.
+
+    Raises:
+        WorkbookRefreshError: The macro returned a failure reason, or overran
+            ``MACRO_TIMEOUT_SEC`` and its Excel was killed.
+        pywintypes.com_error: The macro call itself failed, within the time bound.
+    """
+    pid = excel.pid
+    timeout = MACRO_TIMEOUT_SEC
+    timed_out = threading.Event()
+
+    def _on_timeout() -> None:
+        timed_out.set()
+        log.error(
+            f"{macro_name} exceeded {timeout}s. Excel is stuck, most likely on a modal dialog. "
+            f"Killing its pid {pid}."
+        )
+        _kill_pid(pid)
+
+    watchdog = threading.Timer(timeout, _on_timeout)
+    watchdog.daemon = True
+    log.info(f"Running macro: [cyan]{macro_name}[/cyan]")
+    watchdog.start()
+    try:
+        result = wb.macro(macro_name)()
+    except pywintypes.com_error as exc:
+        if timed_out.is_set():
+            raise WorkbookRefreshError(f"{macro_name} exceeded {timeout}s, Excel was killed") from exc
+        raise
+    finally:
+        watchdog.cancel()
+        # cancel() does not stop a timeout that has already started; wait it out so
+        # timed_out is final before it is read
+        watchdog.join()
+
+    if timed_out.is_set():
+        # Returned just as the watchdog fired: Excel is gone either way
+        raise WorkbookRefreshError(f"{macro_name} exceeded {timeout}s, Excel was killed")
+
+    excel.display_alerts = False
+    excel.screen_updating = False
+
+    failure = _macro_failure(result)
+    if failure is not None:
+        log.error(f"{macro_name} reported: {failure}")
+        raise WorkbookRefreshError(f"{macro_name}: {failure}")
+
+
+def _end_excel(excel: xw.App) -> None:
+    """Quit the Excel this run started, then make sure that process is gone.
+
+    ``kill()`` targets the pid xlwings recorded when it launched this instance, so no
+    other Excel on the machine is touched. It runs even when ``quit()`` fails, which is
+    the case where the process would otherwise be left behind holding the workbook.
+    After a clean quit it fails harmlessly on the exited process: the caller holds the
+    pid with ``_pin_pid``, so it cannot have been reused. Since library 1.8.8
+    ``handle_crash`` only ends Excel started through ``excel_utils``, so this is the only
+    thing that ends this one after a crash.
+
+    Args:
+        excel: The ``xw.App`` this run created.
+    """
+    try:
+        # With alerts on, quitting over an unsaved workbook (the crash path) raises a Save
+        # prompt on a hidden Excel and hangs.
+        excel.display_alerts = False
+        excel.quit()
+    except Exception as exc:
+        log.warning(f"Excel did not quit cleanly ({exc}). Killing it.")
+    try:
+        excel.kill()
+    except Exception:
+        pass  # already exited after quit()
+
+
 def _email_body() -> str:
     """Build the email body with the time-of-day greeting."""
     return (
@@ -119,15 +285,17 @@ def main() -> None:
     """
     driver = None
     excel = None
+    excel_pin = None
     try:
         log.info("Opening workbook and removing charts.")
         excel = xw.App(visible=False)
+        excel_pin = _pin_pid(excel.pid)
         excel.display_alerts = False
         excel.screen_updating = False
         ah_wb = excel.books.open(ah_wb_path)
         sh_metrics = ah_wb.sheets(1)
         sh_dash = ah_wb.sheets(2)
-        ah_wb.macro("modUtilities.deleteCharts")()
+        _run_checked_macro(excel, ah_wb, "modUtilities.deleteCharts")
 
         driver = chrome.start_browser(user_data_dir, "Default", headless=True)
 
@@ -336,13 +504,13 @@ def main() -> None:
         date_str: str = f"{curr_month}/{curr_date}"
 
         log.info("Organizing charts, saving and closing workbook.")
-        ah_wb.macro("modUtilities.resizeCharts")()
+        _run_checked_macro(excel, ah_wb, "modUtilities.resizeCharts")
         time.sleep(3)
         sh_metrics.range("B1").value = date_str
         sh_dash.range("B1").value = date_str
         ah_wb.save()
         ah_wb.close()
-        excel.quit()
+        _end_excel(excel)
         excel = None
 
         log.info("Sending email.")
@@ -373,10 +541,9 @@ def main() -> None:
         except Exception:
             pass
         if excel is not None:
-            try:
-                excel.quit()
-            except Exception:
-                pass
+            _end_excel(excel)
+        if excel_pin is not None:
+            excel_pin.Close()
 
 
 if ask_user("Run now?", "Amazon Account Health"):

@@ -46,9 +46,14 @@ flowchart LR
 This is a scrape-and-paste script — there is no SQL Server or Power Query
 stage; values are written straight into the workbook. The notable choices:
 
-- **Excel runs hidden.** `xw.App(visible=False)` with `display_alerts=False`
-  and `screen_updating=False`, quit in a `finally` block. No flashing window,
-  no stolen focus — safe for scheduled runs.
+- **Excel runs hidden, and this run ends its own.** `xw.App(visible=False)`
+  with `display_alerts=False` and `screen_updating=False`. `_end_excel` quits
+  it with alerts off and then kills that instance by its own pid, on success
+  and in the `finally` after a crash (since shared library 1.8.8 the crash
+  handler only ends Excel started through `excel_utils`, so nothing else
+  would). A handle on that pid is held from launch (`_pin_pid`), so Windows
+  cannot reuse it and a late kill fails on the exited Excel instead of
+  reaching another process. No other Excel on the machine is ever touched.
 - **Chart capture stays in memory.** Each speed-distribution chart is
   screenshotted and pushed into Excel through the Windows clipboard as a
   DIB — no temp image files touch disk.
@@ -62,10 +67,18 @@ stage; values are written straight into the workbook. The notable choices:
 - **Block writes, not cell-by-cell.** Each metric group is assigned to a
   sheet range in a single `range(...).value = df.values` call, minimizing COM
   round-trips.
-- **Version-controlled VBA.** Chart housekeeping (`deleteCharts`,
-  `resizeCharts`) lives in `vba/modUtilities.bas` and is invoked inline
-  (`ah_wb.macro(...)()`), so every run starts on a clean canvas and ends with
-  uniformly sized charts.
+- **Version-controlled VBA, checked and time-bounded.** Chart housekeeping
+  (`deleteCharts`, `resizeCharts`) lives in `vba/modUtilities.bas`, so every
+  run starts on a clean canvas and ends with uniformly sized charts. Both are
+  `Function ... As String` returning `""` on success or a failure reason, and
+  never a `MsgBox` (on a hidden Excel that modal would hang the run with no
+  crash mail). `_run_checked_macro` raises `WorkbookRefreshError` on a reason,
+  turns `display_alerts` back off after the macro's Cleanup re-enables it, and
+  runs a watchdog: past `MACRO_TIMEOUT_SEC` (300) it kills this run's Excel by
+  pid and the run crashes instead of waiting forever. The copy inside
+  `AH-Metrics.xlsm` is what actually runs; an old `Sub` there returns nothing,
+  which is still treated as success, but its `MsgBox` is then only cut short by
+  the watchdog.
 - **Resilient scrape.** The Account Health read retries on `TimeoutException`
   instead of aborting the run.
 - **Premium Shipping is read by metric title, not list position.** The widget
@@ -120,7 +133,7 @@ amzn-account-health/
 │   └── paths.json.example              # absolute path to AH-Metrics.xlsm
 ├── vba/
 │   └── modUtilities.bas                # canonical VBA source — deleteCharts + resizeCharts
-├── tests/                              # pure-function tests
+├── tests/                              # pure-function + Excel-guard tests (no Excel needed)
 ├── screenshots/                        # crash screenshots (gitignored)
 ├── logs/                               # rotating run logs (gitignored)
 ├── downloaded_files/                   # Chrome download landing zone (gitignored)
@@ -164,7 +177,7 @@ Edit each file with real values. All four are gitignored.
 
 ### 3. VBA module (one-time per workbook)
 
-`AH-Metrics.xlsm` must contain the canonical `modUtilities` from `vba/modUtilities.bas`. Open the workbook in Excel, press **Alt+F11**, insert a module named `modUtilities`, and paste the contents of `vba/modUtilities.bas`. Save the workbook.
+`AH-Metrics.xlsm` must contain the canonical `modUtilities` from `vba/modUtilities.bas`. A brand-new workbook may get its first copy by hand: open it in Excel, press **Alt+F11**, insert a module named `modUtilities`, and paste the contents of `vba/modUtilities.bas`. Save the workbook. Editing the file here does not change the workbook, so any later change to the `.bas` is deployed with `fleet-control\tools\vba_swap.py` (procedures `deleteCharts,resizeCharts`), never re-pasted: it backs up the workbook, refuses if it is open, verifies the swap with olevba, and restores the backup on failure. Register the backup in the fleet's vault backup registry.
 
 ### 4. Run
 
